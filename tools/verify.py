@@ -5,7 +5,7 @@ Generates random command files, runs your `engine` binary on each one and compar
 its stdout byte for byte with an independent Python reference implementation.
 
 Usage:
-    python3 verify.py ./target/release/engine [--streams 500] [--len 2000] [--seed 1]
+    python3 tools/verify.py ./target/release/engine [--streams 500] [--len 2000] [--seed 1]
 
 On the first mismatch it stops and writes the input and both outputs to ./verify_fail/.
 """

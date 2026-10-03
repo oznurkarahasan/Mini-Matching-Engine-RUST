@@ -73,6 +73,9 @@ Superseded (old stream, MID_STEP_PCT=10, unpinned, fingerprints `f6d131f3…` / 
 - Level length at cancel of a live order (baseline book, 5M stream, n = 1,316,328): 1: 0.1%, 2-3: 0.3%, 4-7: 1.0%, 8-15: 3.1%, 16-31: 7.1%, 32-63: 14.5%, 64-127: 23.5%, >=128: 50.3%; mean length 158.6, mean position 122.9.
 - Memory: slab 12,112 slots x 40 B (`size_of::<Slot>()`, asserted in a test) = ~0.48 MB at peak; never shrinks.
 
+### Independent black-box check
+- `python3 tools/verify.py target/release/engine --seed 1` and `--seed 2` (defaults: 500 streams x 2,000 lines each) on the SlabBook-default release binary: ALL OK, byte-identical, 1,000,000 input lines per seed (2.0M total), ~7 s per seed.
+
 ### Default switched to SlabBook (after row 2)
 - `run()` / the `engine` CLI now use `Engine::with_book(SlabBook::new())`, un-sized (`EngineConfig` stays opt-in). `Engine::new()` still builds the baseline book for comparison.
 - Bench ids name books explicitly: `*/baseline` = BaselineBook (end_to_end now calls `run_with(.., Engine::new())`), `*/slab` = SlabBook = the CLI default.

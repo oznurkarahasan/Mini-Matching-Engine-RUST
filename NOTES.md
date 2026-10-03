@@ -90,10 +90,7 @@ Part 3 — Performance
 - [x] Before/after numbers in BENCH.md, one change per measurement: rows 1 (hasher) and 2 (slab), change 2 section (pre-sizing); differential test runs on both books
 
 Part 4 — Write-up
-- [ ] README: design, invariants, complexity, limitations, more time, multi-instrument / multi-thread, AI use
+- [x] README: design, invariants, complexity, limitations, more time, multi-instrument / multi-thread, AI use
 
 Final checks
-- [ ] `cargo fmt`, `cargo clippy --all-targets`, `cargo test`, clean `cargo build --release` with no warnings
-
-## 8. Log
-- 
+- [x] `cargo fmt`, `cargo clippy --all-targets`, `cargo test`, clean `cargo build --release` with no warnings 
