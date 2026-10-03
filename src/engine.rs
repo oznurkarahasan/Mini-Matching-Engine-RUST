@@ -20,9 +20,33 @@ pub struct Engine<B: Book> {
     last_trade: Option<Price>,
 }
 
+/// Optional pre-sizing of the engine's hash tables. Sizing up front avoids the
+/// multi-millisecond rehash when a large table grows (see BENCH.md); the cost is
+/// memory reserved up front. `Default` (all zero) means un-sized.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EngineConfig {
+    /// Expected number of accepted ids over the engine's lifetime (the
+    /// `accepted` set never shrinks). Size with headroom: insert-first can leave
+    /// tombstones that consume growth budget (DECISIONS.md #13).
+    pub expected_accepted_ids: usize,
+    /// Expected peak number of live (resting) orders.
+    pub expected_live_orders: usize,
+}
+
 impl Engine<BaselineBook> {
+    /// Un-sized engine; tables grow on demand.
     pub fn new() -> Self {
         Self::with_book(BaselineBook::new())
+    }
+
+    /// Engine with `accepted` and the book's live-order map pre-sized separately.
+    pub fn with_config(config: EngineConfig) -> Self {
+        let mut engine = Self::with_book(BaselineBook::with_capacity(config.expected_live_orders));
+        engine.accepted = HashSet::with_capacity_and_hasher(
+            config.expected_accepted_ids,
+            IdBuildHasher::default(),
+        );
+        engine
     }
 }
 
@@ -44,6 +68,11 @@ impl<B: Book> Engine<B> {
     /// Read-only access to the book (used for reporting depth in benchmarks).
     pub fn book(&self) -> &B {
         &self.book
+    }
+
+    /// Current capacity of the accepted-id set (for memory reporting).
+    pub fn accepted_capacity(&self) -> usize {
+        self.accepted.capacity()
     }
 
     /// Processes one command and appends the resulting events to `out`.
@@ -1016,5 +1045,26 @@ mod tests {
                 modify_reject(5, Reason::UnknownOrder),
             ],
         );
+    }
+    // ---- Configuration ----
+
+    #[test]
+    fn presized_engine_behaves_like_default() {
+        let cmds = crate::loadgen::generate(11, 20_000);
+        let mut a = Engine::new();
+        let mut b = Engine::with_config(EngineConfig {
+            expected_accepted_ids: 1_000,
+            expected_live_orders: 100,
+        });
+        let (mut out_a, mut out_b) = (Vec::new(), Vec::new());
+        for c in &cmds {
+            out_a.clear();
+            out_b.clear();
+            a.process(c, &mut out_a);
+            b.process(c, &mut out_b);
+            assert_eq!(out_a, out_b);
+        }
+        b.check_invariants();
+        assert!(b.accepted_capacity() >= 1_000);
     }
 }

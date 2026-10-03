@@ -77,13 +77,15 @@ Part 2 — Verification
 - [x] Randomized differential test (reference vs engine), distributions documented in README
 
 Part 3 — Performance
-- [ ] Load generator (1M-10M commands, ~60/30/10 NEW/CANCEL/MODIFY, moving mid, dozens of accounts)
-- [ ] Bench harness: throughput + p50/p99/p99.9 (release); replace placeholder bench and `sum`
-- [ ] Baseline numbers -> BENCH.md row 0
-- [ ] Profile (perf / flamegraph), identify top bottleneck
-- [ ] Slab book with index-based linked lists (O(1) cancel), behind the same `Book` trait
-- [ ] Custom hasher instead of SipHash
-- [ ] Before/after numbers in BENCH.md, one change per measurement; differential test green on both books
+- [x] Load generator (shadow-engine feedback, live target 10k, mix knob `MID_STEP_PCT` = 1 -> 60.8/29.3/10.0, 50 accounts, fingerprinted streams)
+- [x] Bench harness: Criterion engine_only + end_to_end (1M), latency example (p50..p99.99, max, timer overhead); placeholder bench and `sum` removed
+- [x] Baseline numbers -> BENCH.md row 0 (pinned, 5 runs, Criterion baseline `baseline0`)
+- [x] Profile (perf / flamegraph), identify top bottleneck: SipHash 32.9% of engine_only, `accepted` rehash 10.8%, cancel linear search ~20%
+- [x] Custom hasher instead of SipHash (change 1, BENCH.md row 1: engine_only -35%, end_to_end -16%)
+  - Order changed vs the original plan: hasher came before the slab because the profile showed hashing as the top bottleneck.
+- [ ] (in progress) EngineConfig pre-sizing (change 2): opt-in, default bench un-sized; max latency 27 ms -> ~176 µs in the latency example
+- [ ] Slab book with index-based linked lists (O(1) cancel, no repeated lookups in front/fill_front), behind the same `Book` trait (change 3)
+- [ ] (partial) Before/after numbers in BENCH.md, one change per measurement: row 1 done; slab pending; the differential test must also run on the slab book
 
 Part 4 — Write-up
 - [ ] README: design, invariants, complexity, limitations, more time, multi-instrument / multi-thread, AI use

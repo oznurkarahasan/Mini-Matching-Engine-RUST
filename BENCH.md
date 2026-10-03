@@ -55,6 +55,19 @@ Superseded (old stream, MID_STEP_PCT=10, unpinned, fingerprints `f6d131f3…` / 
 - p99.9 is bimodal across runs in both rows (~1.0-1.4 µs vs ~2.7-3.7 µs) and moves with machine load; no claim is made for p99.9. p50 (-18%) and p99 (-22%) moved consistently in all runs.
 - Outlier: the top two samples are still the `accepted` set growth (verified with an exact mirror of the set: same hasher, same insert/remove sequence): commands 3,032,489 (26.8-31.8 ms) and 1,514,810 (13.3-15.7 ms). Growth now happens ~100 inserts earlier than the plain count predicts, because removing a rejected id can leave a hashbrown tombstone that still consumes growth budget.
 
+### Change 2: `EngineConfig` pre-sizing (opt-in; default benchmark stays un-sized)
+`Engine::with_config(EngineConfig { expected_accepted_ids, expected_live_orders })` sizes `accepted` and the book's `orders` map separately; `Engine::new()` is unchanged. Measured only in the latency example (`--presized`): `expected_accepted_ids` = number of NEW commands in the stream (3.65M; an upper bound on inserts, so `accepted` can never grow), `expected_live_orders` = 2 x TARGET_LIVE = 20,000. 5 pinned runs per mode, interleaved default/presized, same 6M stream (`2ba0ffeb…`), load average 1.2-1.5.
+
+| Mode | Throughput (6M, whole stream) | p50 | p99 | p99.99 | max | mean |
+|---|---|---|---|---|---|---|
+| default (un-sized) | 7.01 M cmd/s | 152 ns | 498 ns | 4442 ns | **27.2 ms** | 175.4 ns |
+| presized | 7.02 M cmd/s | 158 ns | 503 ns | 4482 ns | **176 µs** | 169.4 ns |
+
+- Per-run values: throughput default 7.03, 6.04, 6.87, 7.01, 7.02 / presized 4.98, 7.12, 7.02, 7.11, 6.68 M cmd/s; max default 26.9, 31.6, 27.0, 27.2, 27.4 ms / presized 1041, 172, 173, 176, 181 µs; p99.99 default 4508, 9415, 4433, 4395, 4442 / presized 9571, 4482, 4473, 4502, 4482 ns.
+- Throughput, p50, p99 and p99.99: no difference beyond noise. Mean drops ~6 ns/command, consistent with the ~45 ms of rehash work (27 + 14 ms + smaller growths) no longer spread over 5M commands.
+- Max: 27 ms -> ~176 µs (150x). The remaining top outlier is command 5,300,890 in every presized run (~175 µs); the mirror shows the `accepted` capacity does not change there and live count is not at a new peak. Unverified hypothesis: an in-place rehash of the `orders` map (cancel churn leaves tombstones; hashbrown rehashes in place when growth budget is exhausted). Not investigated further.
+- Memory: both modes end with the same tables on this stream (default grows to the same bucket count), so pre-sizing costs memory *earlier*, not *more*, here: `accepted` 4,194,304 buckets x (8 B entry + 1 control byte) + 16 = ~37.7 MB; `orders` 32,768 buckets x (48 B entry + 1) + 16 = ~1.61 MB. Computed from `capacity()` with hashbrown's layout (capacity = 7/8 of a power-of-two bucket count, one control byte per bucket, 16 trailing control bytes); allocator overhead ignored. Entry size from `size_of::<(OrderId, Order)>()` = 48 B. An over-estimate of `expected_accepted_ids` costs 9 B per extra slot, rounded up to the next power of two of buckets.
+
 ### Max-latency outlier (verified, not fixed)
 In all 5 latency runs the two largest samples are the same two commands, and both are exactly the insert at which the `accepted: HashSet<OrderId>` grows (growth sizes found by simulating a std `HashSet<u64>` with the public `capacity()`):
 - command 3,032,648 (NEW id 1838765): accepted 1,835,008 -> 1,835,009; std grows at 1,835,009 -> 37-53 ms

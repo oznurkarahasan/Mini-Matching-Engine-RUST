@@ -28,8 +28,27 @@ pub struct BaselineBook {
 }
 
 impl BaselineBook {
+    /// Bytes per bucket entry of the `orders` map (key + value), for memory estimates.
+    pub const ORDER_ENTRY_BYTES: usize = std::mem::size_of::<(OrderId, Order)>();
+
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Book whose live-order map is pre-sized for `expected_live_orders`.
+    pub fn with_capacity(expected_live_orders: usize) -> Self {
+        Self {
+            orders: HashMap::with_capacity_and_hasher(
+                expected_live_orders,
+                IdBuildHasher::default(),
+            ),
+            ..Self::default()
+        }
+    }
+
+    /// Current capacity of the live-order map (for memory reporting).
+    pub fn orders_capacity(&self) -> usize {
+        self.orders.capacity()
     }
 
     fn best_queue(&self, resting_side: Side) -> Option<&VecDeque<OrderId>> {
