@@ -2,48 +2,8 @@
 
 use crate::command::Command;
 use crate::event::Event;
+use crate::loadgen::SplitMix64;
 use crate::types::{AccountId, OrderId, Qty, Side};
-
-/// SplitMix64 (Steele, Lea, Flood 2014): tiny, fast, good enough for test data.
-pub struct SplitMix64 {
-    state: u64,
-}
-
-impl SplitMix64 {
-    pub fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    pub fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// Value in `0..n`. Modulo bias is negligible for the small `n` used here.
-    pub fn below(&mut self, n: u64) -> u64 {
-        self.next_u64() % n
-    }
-
-    /// Value in `lo..=hi`.
-    pub fn range(&mut self, lo: u64, hi: u64) -> u64 {
-        lo + self.below(hi - lo + 1)
-    }
-
-    /// True with probability `p` percent.
-    pub fn percent(&mut self, p: u64) -> bool {
-        self.below(100) < p
-    }
-
-    pub fn pick<T: Copy>(&mut self, xs: &[T]) -> Option<T> {
-        if xs.is_empty() {
-            return None;
-        }
-        Some(xs[self.below(xs.len() as u64) as usize])
-    }
-}
 
 const ACCOUNTS: u64 = 4;
 /// Ids from here up are never used by NEW, so they are "never seen".

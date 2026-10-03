@@ -39,6 +39,11 @@ impl<B: Book> Engine<B> {
         }
     }
 
+    /// Read-only access to the book (used for reporting depth in benchmarks).
+    pub fn book(&self) -> &B {
+        &self.book
+    }
+
     /// Processes one command and appends the resulting events to `out`.
     /// The caller is responsible for clearing `out`.
     pub fn process(&mut self, cmd: &Command, out: &mut Vec<Event>) {

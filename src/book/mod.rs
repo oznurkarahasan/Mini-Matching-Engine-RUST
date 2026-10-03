@@ -47,6 +47,12 @@ pub trait Book {
     /// Precondition: `id` is live and `new_qty > 0`.
     fn move_to_back(&mut self, id: OrderId, new_qty: Qty);
 
+    /// Number of live orders (for reporting book depth).
+    fn order_count(&self) -> usize;
+
+    /// Number of non-empty price levels, both sides (for reporting book depth).
+    fn level_count(&self) -> usize;
+
     /// Panics if the book's internal structure is inconsistent.
     #[cfg(test)]
     fn check_invariants(&self);

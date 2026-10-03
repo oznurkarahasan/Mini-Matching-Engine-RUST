@@ -161,6 +161,14 @@ impl Book for BaselineBook {
         }
     }
 
+    fn order_count(&self) -> usize {
+        self.orders.len()
+    }
+
+    fn level_count(&self) -> usize {
+        self.bids.len() + self.asks.len()
+    }
+
     #[cfg(test)]
     fn check_invariants(&self) {
         use std::collections::HashSet;
