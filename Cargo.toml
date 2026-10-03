@@ -1,0 +1,24 @@
+[package]
+name = "assignment"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "bench"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = "line-tables-only"
+
+[[bin]]
+name = "engine"
+path = "src/main.rs"

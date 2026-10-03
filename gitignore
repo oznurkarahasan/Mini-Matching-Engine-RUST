@@ -1,0 +1,6 @@
+target/
+target-prof/
+perf.data*
+flamegraph.svg
+*.profraw
+.vscode/
