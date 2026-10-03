@@ -50,8 +50,15 @@ impl<B: Book> Engine<B> {
                 price,
                 qty,
             } => self.process_new(id, account, side, price, qty, out),
-            // CANCEL and MODIFY are implemented in steps 6 and 7.
-            Command::Cancel { .. } | Command::Modify { .. } => {}
+            Command::Cancel { id } => out.push(match self.book.remove(id) {
+                Some(remaining) => Event::Canceled { id, remaining },
+                None => Event::CancelReject {
+                    id,
+                    reason: Reason::UnknownOrder,
+                },
+            }),
+            // MODIFY is implemented in step 7.
+            Command::Modify { .. } => {}
         }
     }
 
@@ -655,5 +662,136 @@ mod tests {
             &[sell_as(1, SHARED, 105, 5), buy_as(2, SHARED, 105, 5)],
         );
         assert_eq!(e.last_trade, Some(100));
+    }
+
+    // ---- CANCEL ----
+
+    fn cancel(id: OrderId) -> Command {
+        Command::Cancel { id }
+    }
+
+    fn cancel_unknown(id: OrderId) -> Event {
+        Event::CancelReject {
+            id,
+            reason: Reason::UnknownOrder,
+        }
+    }
+
+    #[test]
+    fn cancel_live_order() {
+        let mut e = Engine::new();
+        let out = run(&mut e, &[buy(1, 100, 10), cancel(1)]);
+        assert_events(&out, &[ack(1), canceled(1, 10)]);
+        assert_eq!(front_of(&e, Side::Buy), None);
+    }
+
+    #[test]
+    fn cancel_reports_remaining_after_partial_fill() {
+        let out = run(
+            &mut Engine::new(),
+            &[sell(1, 100, 10), buy(2, 100, 4), cancel(1)],
+        );
+        assert_events(&out, &[ack(1), ack(2), trade(2, 1, 100, 4), canceled(1, 6)]);
+    }
+
+    #[test]
+    fn cancel_unknown_id() {
+        let out = run(&mut Engine::new(), &[cancel(42)]);
+        assert_events(&out, &[cancel_unknown(42)]);
+    }
+
+    #[test]
+    fn cancel_filled_maker_and_filled_taker() {
+        let out = run(
+            &mut Engine::new(),
+            &[sell(1, 100, 5), buy(2, 100, 5), cancel(1), cancel(2)],
+        );
+        assert_events(
+            &out,
+            &[
+                ack(1),
+                ack(2),
+                trade(2, 1, 100, 5),
+                cancel_unknown(1),
+                cancel_unknown(2),
+            ],
+        );
+    }
+
+    #[test]
+    fn cancel_twice() {
+        let out = run(&mut Engine::new(), &[buy(1, 100, 5), cancel(1), cancel(1)]);
+        assert_events(&out, &[ack(1), canceled(1, 5), cancel_unknown(1)]);
+    }
+
+    #[test]
+    fn cancel_stp_canceled_order() {
+        let out = run(
+            &mut Engine::new(),
+            &[
+                sell_as(1, SHARED, 100, 5),
+                buy_as(2, SHARED, 100, 3),
+                cancel(2),
+            ],
+        );
+        assert_events(&out, &[ack(1), ack(2), canceled(2, 3), cancel_unknown(2)]);
+    }
+
+    #[test]
+    fn cancel_rejected_id() {
+        let out = run(&mut Engine::new(), &[buy(1, 0, 5), cancel(1)]);
+        assert_events(&out, &[reject(1, Reason::InvalidValue), cancel_unknown(1)]);
+    }
+
+    #[test]
+    fn rejected_duplicate_does_not_affect_live_original() {
+        let out = run(
+            &mut Engine::new(),
+            &[buy(1, 100, 5), buy(1, 101, 3), cancel(1)],
+        );
+        assert_events(
+            &out,
+            &[ack(1), reject(1, Reason::DuplicateId), canceled(1, 5)],
+        );
+    }
+
+    #[test]
+    fn cancel_last_order_in_level_next_best_takes_over() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[sell(1, 100, 5), sell(2, 101, 5), cancel(1), buy(3, 101, 5)],
+        );
+        assert_events(
+            &out,
+            &[ack(1), ack(2), canceled(1, 5), ack(3), trade(3, 2, 101, 5)],
+        );
+        assert_eq!(front_of(&e, Side::Sell), None);
+    }
+
+    #[test]
+    fn cancel_from_middle_of_level_keeps_fifo() {
+        let out = run(
+            &mut Engine::new(),
+            &[
+                sell(1, 100, 2),
+                sell(2, 100, 2),
+                sell(3, 100, 2),
+                cancel(2),
+                buy(4, 100, 4),
+            ],
+        );
+        assert_events(
+            &out,
+            &[
+                ack(1),
+                ack(2),
+                ack(3),
+                canceled(2, 2),
+                ack(4),
+                trade(4, 1, 100, 2),
+                trade(4, 3, 100, 2),
+            ],
+        );
     }
 }

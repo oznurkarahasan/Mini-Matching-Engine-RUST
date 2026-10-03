@@ -32,6 +32,10 @@ pub trait Book {
     /// Precondition: `order.id` is not live and `order.remaining > 0`.
     fn insert(&mut self, resting_side: Side, order: Resting);
 
+    /// Removes the live order `id`, dropping its level if it becomes empty.
+    /// Returns its remaining quantity, or `None` if `id` is not live.
+    fn remove(&mut self, id: OrderId) -> Option<Qty>;
+
     /// Panics if the book's internal structure is inconsistent.
     #[cfg(test)]
     fn check_invariants(&self);
