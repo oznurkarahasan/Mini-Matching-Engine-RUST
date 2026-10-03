@@ -63,5 +63,33 @@ comes first and speed second.
 ## 7. TODO
 - [ ] Set up repo layout: `engine` binary, lib crate, sample files in place
 
+Part 1 — Correctness
+- [x] 1. Types, Command, parser (`parse_line`, `AccountInterner`) + tests
+- [x] 2. Events + `write_event`, CLI skeleton (`run`, `main`), sample test (ignored)
+- [ ] 3. Engine NEW checks: DUPLICATE_ID, INVALID_VALUE, PRICE_BAND; ACK; accepted-id set
+- [ ] 4. `Book` trait + `BaselineBook`, matching without STP, `check_invariants` (test only); price band tests
+- [ ] 5. Self-trade prevention (cancel-newest) + tests
+- [ ] 6. CANCEL + tests
+- [ ] 7. MODIFY + tests; un-ignore sample test; `cargo run --release -- sample_input.txt | diff - sample_expected.txt`
+
+Part 2 — Verification
+- [ ] Simple reference engine in test code
+- [ ] Randomized differential test (reference vs engine), distributions documented in README
+
+Part 3 — Performance
+- [ ] Load generator (1M-10M commands, ~60/30/10 NEW/CANCEL/MODIFY, moving mid, dozens of accounts)
+- [ ] Bench harness: throughput + p50/p99/p99.9 (release); replace placeholder bench and `sum`
+- [ ] Baseline numbers -> BENCH.md row 0
+- [ ] Profile (perf / flamegraph), identify top bottleneck
+- [ ] Slab book with index-based linked lists (O(1) cancel), behind the same `Book` trait
+- [ ] Custom hasher instead of SipHash
+- [ ] Before/after numbers in BENCH.md, one change per measurement; differential test green on both books
+
+Part 4 — Write-up
+- [ ] README: design, invariants, complexity, limitations, more time, multi-instrument / multi-thread, AI use
+
+Final checks
+- [ ] `cargo fmt`, `cargo clippy --all-targets`, `cargo test`, clean `cargo build --release` with no warnings
+
 ## 8. Log
 - 
