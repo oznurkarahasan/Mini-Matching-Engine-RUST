@@ -1,9 +1,13 @@
 pub mod command;
+pub mod event;
 pub mod parse;
+pub mod run;
 pub mod types;
 
 pub use command::Command;
+pub use event::{write_event, Event, Reason};
 pub use parse::{parse_line, AccountInterner, ParseError};
+pub use run::run;
 pub use types::{AccountId, OrderId, Price, Qty, Side};
 
 // Placeholder still used by benches/bench.rs; removed when the real bench lands.

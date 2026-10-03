@@ -31,6 +31,7 @@ comes first and speed second.
 | 9 | Line endings / comments | trim trailing `\r`; ignore blank lines and lines starting with `#` | CRLF input mis-parsed |
 | 10 | Unparsable values (overflow, negative) | never panic; skip the line, count skipped lines on stderr | hidden test expects other handling |
 | 11 | Order ids are arbitrary, sparse u64 | hash map lookup, not a Vec indexed by id | n/a (design constraint) |
+| 12 | Numbers with a leading `+` (e.g. `+5`) | accepted, as `str::parse::<u64>` does; harmless since syntax is well-formed | a hidden test expects such a line to be skipped |
 
 ## 4. Approach candidates
 - A: ordered map per side (price -> FIFO queue) plus a hash map from id to order.
