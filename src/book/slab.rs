@@ -4,9 +4,13 @@
 //! access only when the order is at either end of its level); matching reads
 //! the head slot directly, without hashing.
 //!
+//! Broken internal invariants (a slot index that should exist but does not,
+//! a violated `fill_front` precondition) panic with a clear message instead of
+//! being silently ignored. Input errors never reach this code.
+//!
 //! Limitations (documented, see DECISIONS.md #14):
 //! - At most `u32::MAX - 1` simultaneously live orders. Beyond that `insert`
-//!   fails a `debug_assert!`; in release the order is not rested.
+//!   panics.
 //! - The slab never shrinks: memory stays at the peak live-order count. Freed
 //!   slots are reused through a free list threaded through `next`.
 
@@ -77,12 +81,33 @@ impl SlabBook {
     }
 }
 
+/// Slot `i`, which an internal invariant says must exist. Panics otherwise:
+/// a corrupted slab must fail loudly, never be silently skipped.
+fn slot_mut(slots: &mut [Slot], i: u32) -> &mut Slot {
+    let len = slots.len();
+    match slots.get_mut(i as usize) {
+        Some(s) => s,
+        None => panic!("slab invariant violated: slot {i} does not exist (len {len})"),
+    }
+}
+
+/// Shared-reference counterpart of [`slot_mut`]; panics on an invalid index.
+fn slot(slots: &[Slot], i: u32) -> &Slot {
+    match slots.get(i as usize) {
+        Some(s) => s,
+        None => panic!(
+            "slab invariant violated: slot {i} does not exist (len {})",
+            slots.len()
+        ),
+    }
+}
+
 /// Takes a slot from the free list or appends one. `None` if the index space
 /// is exhausted.
 fn alloc(slots: &mut Vec<Slot>, free_head: &mut u32, slot: Slot) -> Option<u32> {
     if *free_head != NONE {
         let i = *free_head;
-        let s = slots.get_mut(i as usize)?;
+        let s = slot_mut(slots, i);
         *free_head = s.next;
         *s = slot;
         return Some(i);
@@ -94,29 +119,24 @@ fn alloc(slots: &mut Vec<Slot>, free_head: &mut u32, slot: Slot) -> Option<u32> 
 
 /// Returns slot `i` to the free list.
 fn release(slots: &mut [Slot], free_head: &mut u32, i: u32) {
-    if let Some(s) = slots.get_mut(i as usize) {
-        s.remaining = 0;
-        s.prev = NONE;
-        s.next = *free_head;
-        *free_head = i;
-    }
+    let s = slot_mut(slots, i);
+    s.remaining = 0;
+    s.prev = NONE;
+    s.next = *free_head;
+    *free_head = i;
 }
 
 /// Removes slot `i` from its level's list; drops the level if it becomes empty.
 /// Touches the B-tree only if `i` is the head or tail.
 fn unlink(levels: &mut Levels, slots: &mut [Slot], i: u32) {
-    let Some(&Slot {
+    let Slot {
         prev, next, price, ..
-    }) = slots.get(i as usize)
-    else {
-        debug_assert!(false, "unlink of invalid slot {i}");
-        return;
-    };
-    if let Some(p) = slots.get_mut(prev as usize) {
-        p.next = next;
+    } = *slot_mut(slots, i);
+    if prev != NONE {
+        slot_mut(slots, prev).next = next;
     }
-    if let Some(n) = slots.get_mut(next as usize) {
-        n.prev = prev;
+    if next != NONE {
+        slot_mut(slots, next).prev = prev;
     }
     if prev == NONE || next == NONE {
         match levels.entry(price) {
@@ -132,13 +152,14 @@ fn unlink(levels: &mut Levels, slots: &mut [Slot], i: u32) {
                     e.remove();
                 }
             }
-            Entry::Vacant(_) => debug_assert!(false, "slot {i} has no level"),
+            Entry::Vacant(_) => {
+                panic!("slab invariant violated: slot {i} at price {price} has no level")
+            }
         }
     }
-    if let Some(s) = slots.get_mut(i as usize) {
-        s.prev = NONE;
-        s.next = NONE;
-    }
+    let s = slot_mut(slots, i);
+    s.prev = NONE;
+    s.next = NONE;
 }
 
 /// Appends slot `i` at the tail of its price level, creating the level if needed.
@@ -146,22 +167,18 @@ fn push_back(levels: &mut Levels, slots: &mut [Slot], i: u32, price: Price) {
     match levels.entry(price) {
         Entry::Vacant(e) => {
             e.insert(Level { head: i, tail: i });
-            if let Some(s) = slots.get_mut(i as usize) {
-                s.prev = NONE;
-                s.next = NONE;
-            }
+            let s = slot_mut(slots, i);
+            s.prev = NONE;
+            s.next = NONE;
         }
         Entry::Occupied(mut e) => {
             let level = e.get_mut();
             let tail = level.tail;
             level.tail = i;
-            if let Some(t) = slots.get_mut(tail as usize) {
-                t.next = i;
-            }
-            if let Some(s) = slots.get_mut(i as usize) {
-                s.prev = tail;
-                s.next = NONE;
-            }
+            slot_mut(slots, tail).next = i;
+            let s = slot_mut(slots, i);
+            s.prev = tail;
+            s.next = NONE;
         }
     }
 }
@@ -185,7 +202,7 @@ impl Book for SlabBook {
             Side::Buy => self.bids.last_key_value(),
             Side::Sell => self.asks.first_key_value(),
         }?;
-        let s = self.slots.get(level.head as usize)?;
+        let s = slot(&self.slots, level.head);
         Some(Resting {
             id: s.id,
             account: s.account,
@@ -199,23 +216,17 @@ impl Book for SlabBook {
             Side::Buy => (self.bids.last_entry(), &mut self.slots),
             Side::Sell => (self.asks.first_entry(), &mut self.slots),
         };
-        debug_assert!(entry.is_some(), "fill_front on empty side");
         let Some(mut level) = entry else {
-            return;
+            panic!("fill_front on empty {resting_side:?} side");
         };
         let head = level.get().head;
-        let Some(slot) = slots.get_mut(head as usize) else {
-            debug_assert!(false, "level head {head} is not a slot");
-            return;
-        };
-        debug_assert!(
+        let slot = slot_mut(slots, head);
+        assert!(
             qty > 0 && qty <= slot.remaining,
             "fill_front: qty {qty} not in 1..={}",
             slot.remaining
         );
-        let Some(left) = slot.remaining.checked_sub(qty) else {
-            return;
-        };
+        let left = slot.remaining - qty;
         if left > 0 {
             slot.remaining = left;
             return;
@@ -226,18 +237,19 @@ impl Book for SlabBook {
             level.remove();
         } else {
             level.get_mut().head = next;
-            if let Some(n) = slots.get_mut(next as usize) {
-                n.prev = NONE;
-            }
+            slot_mut(slots, next).prev = NONE;
         }
         self.index.remove(&id);
         release(&mut self.slots, &mut self.free_head, head);
     }
 
     fn insert(&mut self, resting_side: Side, order: Resting) {
-        debug_assert!(order.remaining > 0, "insert with zero quantity");
-        debug_assert!(!self.index.contains_key(&order.id), "insert of live id");
-        let slot = Slot {
+        assert!(
+            order.remaining > 0,
+            "insert of id {} with zero quantity",
+            order.id
+        );
+        let new_slot = Slot {
             id: order.id,
             price: order.price,
             remaining: order.remaining,
@@ -246,11 +258,12 @@ impl Book for SlabBook {
             next: NONE,
             side: resting_side,
         };
-        let Some(i) = alloc(&mut self.slots, &mut self.free_head, slot) else {
-            debug_assert!(false, "slab index space exhausted");
-            return;
+        let Some(i) = alloc(&mut self.slots, &mut self.free_head, new_slot) else {
+            panic!("slab index space exhausted: at most u32::MAX - 1 live orders");
         };
-        self.index.insert(order.id, i);
+        // The map's own insert detects a live duplicate: no extra lookup.
+        let previous = self.index.insert(order.id, i);
+        assert!(previous.is_none(), "insert of already-live id {}", order.id);
         let levels = match resting_side {
             Side::Buy => &mut self.bids,
             Side::Sell => &mut self.asks,
@@ -260,7 +273,7 @@ impl Book for SlabBook {
 
     fn remove(&mut self, id: OrderId) -> Option<Qty> {
         let i = self.index.remove(&id)?;
-        let s = *self.slots.get(i as usize)?;
+        let s = *slot_mut(&mut self.slots, i);
         let levels = match s.side {
             Side::Buy => &mut self.bids,
             Side::Sell => &mut self.asks,
@@ -272,19 +285,15 @@ impl Book for SlabBook {
 
     fn get_remaining(&self, id: OrderId) -> Option<Qty> {
         let &i = self.index.get(&id)?;
-        self.slots.get(i as usize).map(|s| s.remaining)
+        Some(slot(&self.slots, i).remaining)
     }
 
     fn set_qty(&mut self, id: OrderId, new_qty: Qty) {
-        let Some(s) = self
-            .index
-            .get(&id)
-            .and_then(|&i| self.slots.get_mut(i as usize))
-        else {
-            debug_assert!(false, "set_qty on non-live id {id}");
-            return;
+        let Some(&i) = self.index.get(&id) else {
+            panic!("set_qty on non-live id {id}");
         };
-        debug_assert!(
+        let s = slot_mut(&mut self.slots, i);
+        assert!(
             0 < new_qty && new_qty <= s.remaining,
             "set_qty: {new_qty} not in 1..={}",
             s.remaining
@@ -293,14 +302,11 @@ impl Book for SlabBook {
     }
 
     fn move_to_back(&mut self, id: OrderId, new_qty: Qty) {
-        debug_assert!(new_qty > 0, "move_to_back with zero quantity");
+        assert!(new_qty > 0, "move_to_back of id {id} with zero quantity");
         let Some(&i) = self.index.get(&id) else {
-            debug_assert!(false, "move_to_back on non-live id {id}");
-            return;
+            panic!("move_to_back on non-live id {id}");
         };
-        let Some(s) = self.slots.get_mut(i as usize) else {
-            return;
-        };
+        let s = slot_mut(&mut self.slots, i);
         s.remaining = new_qty;
         if s.next == NONE {
             return; // already last in its level
@@ -414,6 +420,63 @@ mod tests {
         }
         b.check_invariants();
         b
+    }
+
+    #[test]
+    #[should_panic(expected = "fill_front: qty 6 not in 1..=5")]
+    fn fill_front_over_remaining_panics() {
+        let mut b = book_with(&[1]);
+        b.fill_front(Side::Sell, 6);
+    }
+
+    #[test]
+    #[should_panic(expected = "fill_front on empty Sell side")]
+    fn fill_front_on_empty_side_panics() {
+        let mut b = SlabBook::new();
+        b.fill_front(Side::Sell, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "slab invariant violated: slot 99 does not exist")]
+    fn unlink_of_invalid_index_panics() {
+        let mut b = book_with(&[1]);
+        unlink(&mut b.asks, &mut b.slots, 99);
+    }
+
+    #[test]
+    #[should_panic(expected = "insert of already-live id 1")]
+    fn insert_of_live_id_panics() {
+        let mut b = book_with(&[1]);
+        b.insert(Side::Buy, order(1, 90, 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "insert of id 2 with zero quantity")]
+    fn insert_with_zero_qty_panics() {
+        let mut b = SlabBook::new();
+        b.insert(Side::Sell, order(2, 100, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "set_qty on non-live id 7")]
+    fn set_qty_on_non_live_id_panics() {
+        book_with(&[1]).set_qty(7, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "move_to_back on non-live id 7")]
+    fn move_to_back_on_non_live_id_panics() {
+        book_with(&[1]).move_to_back(7, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "slab invariant violated: slot 99 does not exist")]
+    fn front_with_corrupt_head_panics() {
+        let mut b = book_with(&[1]);
+        if let Some(level) = b.asks.get_mut(&100) {
+            level.head = 99;
+        }
+        b.front(Side::Sell);
     }
 
     #[test]

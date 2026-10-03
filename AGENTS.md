@@ -29,7 +29,7 @@ The use of AI tools is allowed by the organizers. The submission is judged on **
 
 ## Rust and performance standards
 
-- `cargo fmt` and `cargo clippy` clean; no warnings. No `unwrap`/`expect` in library code outside tests.
+- `cargo fmt` and `cargo clippy` clean; no warnings. No `unwrap`/`expect` on input/parse paths (bad input never panics); internal invariant violations fail loudly with `assert!`/`panic!` and a clear message instead of being silently ignored.
 - Hot paths: no allocation, no `clone`, no dynamic dispatch, no hashing with the default hasher unless justified. Preallocate (`with_capacity`), keep data contiguous, prefer indices over pointers, use integer arithmetic for money/prices.
 - `unsafe` only when a benchmark shows it is needed; every block gets a `// SAFETY:` comment and a test.
 - Prefer the simplest correct solution first. Optimize only the measured bottleneck.
