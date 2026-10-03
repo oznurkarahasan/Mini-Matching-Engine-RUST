@@ -5,6 +5,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use super::{Book, Resting};
+use crate::hash::IdBuildHasher;
 use crate::types::{OrderId, Price, Qty, Side};
 
 type Levels = BTreeMap<Price, VecDeque<OrderId>>;
@@ -23,7 +24,7 @@ pub struct BaselineBook {
     /// Best ask = lowest key.
     asks: Levels,
     /// Live orders only. Invariant: exactly the ids queued in `bids` and `asks`.
-    orders: HashMap<OrderId, Order>,
+    orders: HashMap<OrderId, Order, IdBuildHasher>,
 }
 
 impl BaselineBook {

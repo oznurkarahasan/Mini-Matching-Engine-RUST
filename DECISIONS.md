@@ -71,3 +71,9 @@
 - Why: the priority rule is a spec rule; consistent with #7, the book only stores. A single `modify(id, q, keep_priority)` would push the rule into every book implementation.
 - Alternative considered: one `modify` method with a boolean flag.
 - Result / evidence: MODIFY tests (priority shown by which maker trades next).
+
+## 13. SplitMix64-finalizer hasher for id maps; `accepted` inserts first
+- Decision: every engine/book map keyed by order id (`accepted`, `orders`) uses `IdHasher` (SplitMix64 finalizer, xor-shift-multiply). `accepted.insert(id)` is the duplicate check; on a later INVALID_VALUE / PRICE_BAND reject the id is removed again, so the accepted path hashes once.
+- Why: profile showed SipHash in 32.9% of engine_only samples. A plain multiply leaves low bits (hashbrown's bucket index) poorly mixed for strided ids; the finalizer mixes all bits. No HashDoS protection is needed: this is a replay simulator on trusted input. The account interner (string keys, parse path) keeps SipHash.
+- Alternative considered: plain multiplicative hash; keeping `contains` + `insert`.
+- Result / evidence: behaviour unchanged (differential test green; release CLI output on the 5M file byte-identical to the previous commit, sha256 770b6476…; stream fingerprint unchanged). Numbers: BENCH.md row 1.

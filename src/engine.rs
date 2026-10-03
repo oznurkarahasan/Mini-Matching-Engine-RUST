@@ -3,6 +3,8 @@
 
 use std::collections::HashSet;
 
+use crate::hash::IdBuildHasher;
+
 use crate::book::{BaselineBook, Book, Resting};
 use crate::command::Command;
 use crate::event::{Event, Reason};
@@ -13,7 +15,7 @@ pub struct Engine<B: Book> {
     book: B,
     /// Every id ever accepted (ACKed), including filled and canceled orders.
     /// Grows without bound; see README limitations.
-    accepted: HashSet<OrderId>,
+    accepted: HashSet<OrderId, IdBuildHasher>,
     /// Price of the most recent trade; `None` until the first trade.
     last_trade: Option<Price>,
 }
@@ -34,7 +36,7 @@ impl<B: Book> Engine<B> {
     pub fn with_book(book: B) -> Self {
         Self {
             book,
-            accepted: HashSet::new(),
+            accepted: HashSet::default(),
             last_trade: None,
         }
     }
@@ -75,7 +77,9 @@ impl<B: Book> Engine<B> {
         qty: Qty,
         out: &mut Vec<Event>,
     ) {
-        let reject = if self.accepted.contains(&id) {
+        // Insert first so the accepted path hashes once; `insert` returning
+        // false is exactly the DUPLICATE_ID check.
+        let reject = if !self.accepted.insert(id) {
             Some(Reason::DuplicateId)
         } else if price == 0 || qty == 0 {
             Some(Reason::InvalidValue)
@@ -88,11 +92,14 @@ impl<B: Book> Engine<B> {
             None
         };
         if let Some(reason) = reject {
-            // A rejected id is not consumed: it never enters `accepted`.
+            // A rejected id is not consumed: undo the insert (not for a
+            // duplicate, whose id belongs to the earlier accepted order).
+            if reason != Reason::DuplicateId {
+                self.accepted.remove(&id);
+            }
             out.push(Event::Reject { id, reason });
             return;
         }
-        self.accepted.insert(id);
         out.push(Event::Ack { id });
 
         let resting_side = side.opposite();

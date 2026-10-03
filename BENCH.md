@@ -34,7 +34,8 @@ How to reproduce:
 | # | Change | Stream | engine_only | end_to_end | p50 | p99 | p99.9 | Notes |
 |---|---|---|---|---|---|---|---|---|
 | 0 | Baseline (BTreeMap + VecDeque + std HashMap/SipHash) | `41a93dfb…` / `2ba0ffeb…` | 221.9 ms / 1M = 4.51 M cmd/s | 329.6 ms / 1M = 3.03 M cmd/s | 190 ns | 644 ns | 1348 ns | Criterion baseline saved as `baseline0` (from run 5). max 37.2 ms = `accepted` set growth (see below) |
-| 1 | | | | | | | | |
+| 1 | SplitMix64-finalizer hasher for `accepted` + `orders`; `accepted` insert-first (DECISIONS #13) | same | 143.9 ms / 1M = 6.95 M cmd/s (**-35.2%**) | 277.8 ms / 1M = 3.60 M cmd/s (**-15.7%**) | 155 ns | 503 ns | 2762 ns (noisy, see details) | max 27.7 ms (was 37.2), still `accepted` growth |
+| 2 | | | | | | | | |
 
 Superseded (old stream, MID_STEP_PCT=10, unpinned, fingerprints `f6d131f3…` / `ee234d5f…`): engine_only 189.7 ms, end_to_end 338.6 ms, p50/p99/p99.9 167/651/3223 ns. Not comparable with row 0: different stream (fewer cancels, shallower book).
 
@@ -44,6 +45,15 @@ Superseded (old stream, MID_STEP_PCT=10, unpinned, fingerprints `f6d131f3…` / 
 - Latency (ns), engine, 5 pinned runs: p50 205, 190, 190, 189, 189 -> 190; p99 729, 644, 644, 645, 640 -> 644; p99.9 3723, 1348, 1286, 1369, 1316 -> 1348; p99.99 9948, 4427, 4463, 4502, 4406 -> 4463; max 53.2, 37.2, 37.2, 37.2, 38.2 ms.
 - Timer overhead (two `Instant::now()`, empty body): p50 20 ns, p99 22-31 ns, p99.9 28-45 ns. Reported alongside, not subtracted.
 - Final book after latency run: 10,403 live orders, 94 levels.
+
+### Row 1 details
+- Behaviour check: differential test green; release CLI output on `data/load_5000000_s42.txt` byte-identical to row 0's commit (sha256 `770b6476…` both); stream fingerprints unchanged.
+- engine_only point estimates (ms), 5 pinned runs vs `baseline0`: 130.95, 143.88, 152.37, 147.29, 142.93 -> median 143.88. Criterion change vs baseline0 in every run: -37% to -41% (p = 0.00). Well outside the ~13% noise band.
+- end_to_end (ms): 279.69, 262.37, 276.62, 288.45, 277.76 -> median 277.76. Criterion change: -13% to -23% (p = 0.00).
+- Load average during these runs was 1.8-2.6 (higher than row 0's 0.6-1.6): the comparison is conservative if anything.
+- Latency (ns), 5 pinned runs: p50 155, 155, 153, 156, 154 -> 155; p99 514, 508, 501, 503, 500 -> 503; p99.9 3445, 3268, 2762, 1026, 2755 -> 2762; p99.99 9492, 9405, 4413, 4372, 4415 -> 4415; max 31.8, 31.6, 27.2, 26.8, 27.7 ms -> 27.7.
+- p99.9 is bimodal across runs in both rows (~1.0-1.4 µs vs ~2.7-3.7 µs) and moves with machine load; no claim is made for p99.9. p50 (-18%) and p99 (-22%) moved consistently in all runs.
+- Outlier: the top two samples are still the `accepted` set growth (verified with an exact mirror of the set: same hasher, same insert/remove sequence): commands 3,032,489 (26.8-31.8 ms) and 1,514,810 (13.3-15.7 ms). Growth now happens ~100 inserts earlier than the plain count predicts, because removing a rejected id can leave a hashbrown tombstone that still consumes growth budget.
 
 ### Max-latency outlier (verified, not fixed)
 In all 5 latency runs the two largest samples are the same two commands, and both are exactly the insert at which the `accepted: HashSet<OrderId>` grows (growth sizes found by simulating a std `HashSet<u64>` with the public `capacity()`):

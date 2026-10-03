@@ -2,6 +2,7 @@ pub mod book;
 pub mod command;
 pub mod engine;
 pub mod event;
+pub mod hash;
 pub mod loadgen;
 pub mod parse;
 pub mod run;

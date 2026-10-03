@@ -104,55 +104,66 @@ fn top_samples(samples: &[u64], k: usize) -> Vec<(u64, usize)> {
     idx
 }
 
-/// For each outlier: how many ids had been accepted (= `accepted` set size)
-/// right after that command, the live count, and whether that command's insert
-/// is exactly where a std `HashSet<u64>` grows (found by simulation with the
-/// public `capacity()`, not by assuming a load factor).
+/// For each outlier: the accepted-set size after that command, the live count,
+/// and whether the `accepted` set's capacity changed during that command. The
+/// set is mirrored exactly: same hasher, same operation sequence as the engine
+/// (insert on every non-duplicate NEW, remove again on INVALID_VALUE /
+/// PRICE_BAND), so tombstones and growth points match the real set.
 fn explain_outliers(cmds: &[assignment::Command], warmup: usize, top: &[(u64, usize)]) {
+    use assignment::hash::IdBuildHasher;
+    use assignment::{Command, Reason};
     use std::collections::HashSet;
 
     let last = top.iter().map(|&(_, i)| warmup + i).max().unwrap_or(0);
-    // Replay on a fresh engine, recording accepted count and live count per command.
     let mut engine = Engine::new();
     let mut out = Vec::new();
-    let mut accepted = 0usize;
+    let mut mirror: HashSet<u64, IdBuildHasher> = HashSet::default();
     let mut live_peak = 0usize;
+    // (accepted len, live, live peak, capacity changed during this command)
     let mut per_cmd = Vec::with_capacity(last + 1);
     for cmd in &cmds[..=last] {
         out.clear();
         engine.process(cmd, &mut out);
-        accepted += out
-            .iter()
-            .filter(|e| matches!(e, Event::Ack { .. }))
-            .count();
-        live_peak = live_peak.max(engine.book().order_count());
-        per_cmd.push((accepted, engine.book().order_count(), live_peak));
-    }
-
-    // Sizes at which std HashSet<u64> reallocates (len after the insert that grew it).
-    let max_accepted = per_cmd.last().map(|p| p.0).unwrap_or(0);
-    let mut growth_at = Vec::new();
-    let mut sim: HashSet<u64> = HashSet::new();
-    for k in 0..max_accepted as u64 {
-        let before = sim.capacity();
-        sim.insert(k);
-        if sim.capacity() != before {
-            growth_at.push(sim.len());
+        let cap_before = mirror.capacity();
+        if let Command::New { id, .. } = *cmd {
+            let dup = out.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::Reject {
+                        reason: Reason::DuplicateId,
+                        ..
+                    }
+                )
+            });
+            if !dup {
+                mirror.insert(id);
+                if out.iter().any(|e| matches!(e, Event::Reject { .. })) {
+                    mirror.remove(&id);
+                }
+            }
         }
+        live_peak = live_peak.max(engine.book().order_count());
+        per_cmd.push((
+            mirror.len(),
+            engine.book().order_count(),
+            live_peak,
+            mirror.capacity() != cap_before,
+        ));
     }
-    let big: Vec<usize> = growth_at.iter().copied().filter(|&g| g > 100_000).collect();
-    println!("std HashSet<u64> grows when len reaches: {big:?} (sizes > 100k shown)");
 
     for &(ns, i) in top {
         let ci = warmup + i;
-        let (acc, live, peak) = per_cmd[ci];
-        let (acc_before, _, peak_before) = if ci > 0 { per_cmd[ci - 1] } else { (0, 0, 0) };
-        let accepted_grew = acc > acc_before && growth_at.contains(&acc);
-        let orders_new_peak = peak > peak_before;
+        let (acc, live, peak, grew) = per_cmd[ci];
+        let (acc_before, _, peak_before, _) = if ci > 0 {
+            per_cmd[ci - 1]
+        } else {
+            (0, 0, 0, false)
+        };
         println!(
             "outlier {ns:>10} ns at command {ci} ({:?}): accepted {acc_before}->{acc}, \
-             accepted-set growth point: {accepted_grew}; live {live}, new live peak: {orders_new_peak}",
-            cmds[ci]
+             accepted-set capacity changed: {grew}; live {live}, new live peak: {}",
+            cmds[ci],
+            peak > peak_before
         );
     }
 }
