@@ -35,15 +35,16 @@ impl BaselineBook {
         Self::default()
     }
 
-    /// Book whose live-order map is pre-sized for `expected_live_orders`.
-    pub fn with_capacity(expected_live_orders: usize) -> Self {
-        Self {
-            orders: HashMap::with_capacity_and_hasher(
-                expected_live_orders,
-                IdBuildHasher::default(),
-            ),
-            ..Self::default()
-        }
+    /// (length of the level holding live order `id`, its 0-based position in
+    /// the FIFO). Reporting only: shows the linear-search cost of cancel.
+    pub fn level_len_and_pos_of(&self, id: OrderId) -> Option<(usize, usize)> {
+        let o = self.orders.get(&id)?;
+        let levels = match o.side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        let q = levels.get(&o.resting.price)?;
+        Some((q.len(), q.iter().position(|&x| x == id)?))
     }
 
     /// Current capacity of the live-order map (for memory reporting).
@@ -68,6 +69,16 @@ impl BaselineBook {
 }
 
 impl Book for BaselineBook {
+    fn with_capacity(expected_live_orders: usize) -> Self {
+        Self {
+            orders: HashMap::with_capacity_and_hasher(
+                expected_live_orders,
+                IdBuildHasher::default(),
+            ),
+            ..Self::default()
+        }
+    }
+
     fn front(&self, resting_side: Side) -> Option<Resting> {
         let id = self.best_queue(resting_side)?.front()?;
         self.orders.get(id).map(|o| o.resting)

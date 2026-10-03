@@ -7,6 +7,7 @@ mod reference;
 use std::fmt::Write as _;
 use std::panic::{self, AssertUnwindSafe};
 
+use crate::book::{Book, SlabBook};
 use crate::command::Command;
 use crate::engine::Engine;
 use crate::event::{write_event, Event, Reason};
@@ -122,46 +123,81 @@ fn failure_report(seed: u64, index: usize, history: &[Command], problem: &str) -
     r
 }
 
-/// Runs one stream through both engines, comparing events and checking
-/// invariants after every command. Panics with a replayable report on failure.
+/// Processes `cmd` on `engine` and checks its invariants. Panics from either
+/// (invariant checks, debug asserts) are caught and re-raised with a
+/// replayable report naming the book.
+fn step<B: Book>(
+    book_name: &str,
+    engine: &mut Engine<B>,
+    cmd: &Command,
+    out: &mut Vec<Event>,
+    ctx: (u64, usize, &[Command]),
+) {
+    let (seed, index, history) = ctx;
+    out.clear();
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        engine.process(cmd, out);
+        engine.check_invariants();
+    }));
+    if let Err(payload) = result {
+        let msg = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("<non-string panic>");
+        panic!(
+            "{}",
+            failure_report(
+                seed,
+                index,
+                history,
+                &format!("{book_name} engine panicked: {msg}")
+            )
+        );
+    }
+}
+
+/// Runs one stream through the reference and through the engine on BOTH books,
+/// comparing events and checking invariants after every command. Panics with a
+/// replayable report on failure.
 fn run_stream(seed: u64, len: usize, cov: &mut Coverage) {
     let mut gen = Generator::new(seed);
-    let mut engine = Engine::new();
+    let mut baseline = Engine::new();
+    let mut slab = Engine::with_book(SlabBook::new());
     let mut reference = RefEngine::new();
     let mut history = Vec::with_capacity(len);
-    let mut got = Vec::new();
+    let (mut got_baseline, mut got_slab) = (Vec::new(), Vec::new());
 
     for index in 0..len {
         let live = reference.live_orders();
         let cmd = gen.next(&live);
         history.push(cmd);
 
-        got.clear();
-        // Catch panics from invariant checks / debug asserts so the report still prints.
-        let step = panic::catch_unwind(AssertUnwindSafe(|| {
-            engine.process(&cmd, &mut got);
-            engine.check_invariants();
-        }));
-        if let Err(payload) = step {
-            let msg = payload
-                .downcast_ref::<String>()
-                .map(String::as_str)
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .unwrap_or("<non-string panic>");
-            panic!(
-                "{}",
-                failure_report(seed, index, &history, &format!("engine panicked: {msg}"))
-            );
-        }
+        step(
+            "baseline",
+            &mut baseline,
+            &cmd,
+            &mut got_baseline,
+            (seed, index, &history),
+        );
+        step(
+            "slab",
+            &mut slab,
+            &cmd,
+            &mut got_slab,
+            (seed, index, &history),
+        );
 
         let expected = reference.process(&cmd);
-        if got != expected {
-            let problem = format!(
-                "--- engine ---\n{}--- reference ---\n{}",
-                event_lines(&got),
-                event_lines(&expected)
-            );
-            panic!("{}", failure_report(seed, index, &history, &problem));
+        for (name, got) in [("baseline", &got_baseline), ("slab", &got_slab)] {
+            if *got != expected {
+                let problem = format!(
+                    "--- engine ({name} book) ---\n{}--- reference ---\n{}",
+                    event_lines(got),
+                    event_lines(&expected)
+                );
+                panic!("{}", failure_report(seed, index, &history, &problem));
+            }
         }
 
         cov.record(&cmd, &live, &expected);

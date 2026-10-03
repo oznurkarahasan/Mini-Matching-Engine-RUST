@@ -2,8 +2,10 @@
 //! nothing about matching rules; those live in [`crate::engine::Engine`].
 
 mod baseline;
+mod slab;
 
 pub use baseline::BaselineBook;
+pub use slab::SlabBook;
 
 use crate::types::{AccountId, OrderId, Price, Qty, Side};
 
@@ -19,6 +21,11 @@ pub struct Resting {
 /// Preconditions are checked with `debug_assert!` only: zero cost and no
 /// panics in release builds.
 pub trait Book {
+    /// Empty book with live-order storage pre-sized for `expected_live_orders`.
+    fn with_capacity(expected_live_orders: usize) -> Self
+    where
+        Self: Sized;
+
     /// Oldest order at the best price on `resting_side`, if any.
     fn front(&self, resting_side: Side) -> Option<Resting>;
 

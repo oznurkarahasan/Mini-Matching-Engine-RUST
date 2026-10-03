@@ -1,6 +1,6 @@
 //! Per-command latency of the engine on the synthetic stream.
 //!
-//! Usage: cargo run --release --example latency -- [measured] [warmup] [seed] [--presized]
+//! Usage: cargo run --release --example latency -- [measured] [warmup] [seed] [--presized] [--slab]
 //! Defaults: 5_000_000 measured commands after 1_000_000 untimed warm-up
 //! commands, seed 42, un-sized engine. Suggested: pin with `taskset -c 2`.
 //!
@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use assignment::book::BaselineBook;
 use assignment::loadgen::{fingerprint, generate, TARGET_LIVE};
-use assignment::{Book, Command, Engine, EngineConfig, Event};
+use assignment::{Book, Command, Engine, EngineConfig, Event, SlabBook};
 
 fn nanos_since(t0: Instant, t1: Instant) -> u64 {
     u64::try_from(t1.duration_since(t0).as_nanos()).unwrap_or(u64::MAX)
@@ -61,15 +61,16 @@ fn table_bytes(capacity: usize, entry: usize) -> usize {
     buckets * entry + buckets + 16
 }
 
-fn make_engine(config: Option<EngineConfig>) -> Engine<BaselineBook> {
+fn make_engine<B: Book>(config: Option<EngineConfig>) -> Engine<B> {
     match config {
         Some(c) => Engine::with_config(c),
-        None => Engine::new(),
+        None => Engine::with_book(B::with_capacity(0)),
     }
 }
 
 fn main() {
     let presized = env::args().any(|a| a == "--presized");
+    let slab = env::args().any(|a| a == "--slab");
     let args: Vec<u64> = env::args().skip(1).filter_map(|s| s.parse().ok()).collect();
     let measured = args.first().copied().unwrap_or(5_000_000) as usize;
     let warmup = args.get(1).copied().unwrap_or(1_000_000) as usize;
@@ -89,13 +90,48 @@ fn main() {
         expected_live_orders: 2 * TARGET_LIVE,
     });
     println!(
-        "mode: {}",
+        "mode: book={} {}",
+        if slab { "slab" } else { "baseline" },
         match config {
             Some(c) => format!("presized {c:?}"),
             None => "default (un-sized)".to_string(),
         }
     );
 
+    let top = if slab {
+        measure::<SlabBook>(&cmds, warmup, measured, config, |e| {
+            println!(
+                "slab slots: {} (peak live; never shrinks)",
+                e.book().slot_count()
+            );
+        })
+    } else {
+        measure::<BaselineBook>(&cmds, warmup, measured, config, |e| {
+            let acc_cap = e.accepted_capacity();
+            let ord_cap = e.book().orders_capacity();
+            let acc_mb = table_bytes(acc_cap, 8) as f64 / 1e6;
+            let ord_mb = table_bytes(ord_cap, BaselineBook::ORDER_ENTRY_BYTES) as f64 / 1e6;
+            println!(
+                "tables at end: accepted cap {acc_cap} (~{acc_mb:.1} MB, 8 B/entry), \
+                 orders cap {ord_cap} (~{ord_mb:.2} MB, {} B/entry)",
+                BaselineBook::ORDER_ENTRY_BYTES
+            );
+        })
+    };
+    // Outlier analysis replays on the baseline book: events are identical for
+    // both books (differential test), and only the `accepted` mirror matters.
+    explain_outliers(&cmds, warmup, &top, config);
+}
+
+/// Timer overhead, per-command latency after warm-up, and whole-stream
+/// throughput, for book `B`. Returns the top samples for outlier analysis.
+fn measure<B: Book>(
+    cmds: &[Command],
+    warmup: usize,
+    measured: usize,
+    config: Option<EngineConfig>,
+    report_memory: impl Fn(&Engine<B>),
+) -> Vec<(u64, usize)> {
     // Non-zero fill writes every page now, so no page faults while timing
     // (vec![0; n] may be lazily mapped zero pages).
     let mut samples = vec![1u64; measured];
@@ -108,7 +144,7 @@ fn main() {
     }
     report("timer_overhead", &mut samples);
 
-    let mut engine = make_engine(config);
+    let mut engine: Engine<B> = make_engine(config);
     let mut out: Vec<Event> = Vec::with_capacity(64);
     for cmd in &cmds[..warmup] {
         out.clear();
@@ -126,27 +162,18 @@ fn main() {
     let top = top_samples(&samples, 5);
     report("engine", &mut samples);
 
-    let book = engine.book();
     println!(
         "final book: {} live orders, {} levels",
-        book.order_count(),
-        book.level_count()
+        engine.book().order_count(),
+        engine.book().level_count()
     );
-    let acc_cap = engine.accepted_capacity();
-    let ord_cap = book.orders_capacity();
-    let acc_mb = table_bytes(acc_cap, 8) as f64 / 1e6;
-    let ord_mb = table_bytes(ord_cap, BaselineBook::ORDER_ENTRY_BYTES) as f64 / 1e6;
-    println!(
-        "tables at end: accepted cap {acc_cap} (~{acc_mb:.1} MB, 8 B/entry), \
-         orders cap {ord_cap} (~{ord_mb:.2} MB, {} B/entry)",
-        BaselineBook::ORDER_ENTRY_BYTES
-    );
+    report_memory(&engine);
     drop(engine);
 
     // Throughput: whole stream, fresh engine, no per-command timing.
-    let mut engine = make_engine(config);
+    let mut engine: Engine<B> = make_engine(config);
     let t0 = Instant::now();
-    for cmd in &cmds {
+    for cmd in cmds {
         out.clear();
         engine.process(cmd, &mut out);
         black_box(&out);
@@ -158,9 +185,7 @@ fn main() {
         secs,
         cmds.len() as f64 / secs / 1e6
     );
-    drop(engine);
-
-    explain_outliers(&cmds, warmup, &top, config);
+    top
 }
 
 /// The `k` largest samples as (value_ns, measured_index), largest first.
@@ -187,7 +212,7 @@ fn explain_outliers(
     use std::collections::HashSet;
 
     let last = top.iter().map(|&(_, i)| warmup + i).max().unwrap_or(0);
-    let mut engine = make_engine(config);
+    let mut engine: Engine<BaselineBook> = make_engine(config);
     let mut out = Vec::new();
     let mut mirror: HashSet<u64, IdBuildHasher> = HashSet::with_capacity_and_hasher(
         config.map_or(0, |c| c.expected_accepted_ids),

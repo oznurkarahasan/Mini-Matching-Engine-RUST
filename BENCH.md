@@ -35,7 +35,8 @@ How to reproduce:
 |---|---|---|---|---|---|---|---|---|
 | 0 | Baseline (BTreeMap + VecDeque + std HashMap/SipHash) | `41a93dfb…` / `2ba0ffeb…` | 221.9 ms / 1M = 4.51 M cmd/s | 329.6 ms / 1M = 3.03 M cmd/s | 190 ns | 644 ns | 1348 ns | Criterion baseline saved as `baseline0` (from run 5). max 37.2 ms = `accepted` set growth (see below) |
 | 1 | SplitMix64-finalizer hasher for `accepted` + `orders`; `accepted` insert-first (DECISIONS #13) | same | 143.9 ms / 1M = 6.95 M cmd/s (**-35.2%**) | 277.8 ms / 1M = 3.60 M cmd/s (**-15.7%**) | 155 ns | 503 ns | 2762 ns (noisy, see details) | max 27.7 ms (was 37.2), still `accepted` growth |
-| 2 | | | | | | | | |
+| 2 | SlabBook (slab + index-linked FIFO per level; DECISIONS #14) | same | 82.4 ms / 1M = 12.14 M cmd/s (**-38.3%** vs baseline book in the same session) | 210.8 ms / 1M = 4.74 M cmd/s (**-24.1%**) | 90 ns | 361 ns | 650 ns | max 26.8 ms (`accepted` growth, book-independent). Not yet the CLI default |
+| 3 | | | | | | | | |
 
 Superseded (old stream, MID_STEP_PCT=10, unpinned, fingerprints `f6d131f3…` / `ee234d5f…`): engine_only 189.7 ms, end_to_end 338.6 ms, p50/p99/p99.9 167/651/3223 ns. Not comparable with row 0: different stream (fewer cancels, shallower book).
 
@@ -54,6 +55,23 @@ Superseded (old stream, MID_STEP_PCT=10, unpinned, fingerprints `f6d131f3…` / 
 - Latency (ns), 5 pinned runs: p50 155, 155, 153, 156, 154 -> 155; p99 514, 508, 501, 503, 500 -> 503; p99.9 3445, 3268, 2762, 1026, 2755 -> 2762; p99.99 9492, 9405, 4413, 4372, 4415 -> 4415; max 31.8, 31.6, 27.2, 26.8, 27.7 ms -> 27.7.
 - p99.9 is bimodal across runs in both rows (~1.0-1.4 µs vs ~2.7-3.7 µs) and moves with machine load; no claim is made for p99.9. p50 (-18%) and p99 (-22%) moved consistently in all runs.
 - Outlier: the top two samples are still the `accepted` set growth (verified with an exact mirror of the set: same hasher, same insert/remove sequence): commands 3,032,489 (26.8-31.8 ms) and 1,514,810 (13.3-15.7 ms). Growth now happens ~100 inserts earlier than the plain count predicts, because removing a rejected id can leave a hashbrown tombstone that still consumes growth budget.
+
+### Row 2 details (SlabBook)
+- Same session, same stream (`41a93dfb…` / `2ba0ffeb…`), 5 pinned runs, each Criterion run measures both books (`*/baseline` = BaselineBook with the row 1 code path, `*/slab` = SlabBook). Load average 1.4-1.8.
+- engine_only (ms): baseline 143.26, 139.37, 131.78, 133.52, 127.52 -> median 133.52 (row 1 was 143.9: session within noise); slab 82.35, 78.37, 103.55, 75.66, 85.09 -> median 82.35. Slab faster in every run; -38% vs same-session baseline, -43% vs row 1.
+- end_to_end (ms): baseline 277.59, 276.23, 269.29, 363.26, 287.86 -> 277.59; slab 212.62, 248.37, 206.80, 210.78, 195.73 -> 210.78 (-24%).
+- Latency (ns), interleaved baseline/slab, 5 runs each, default sizing:
+
+| Book | Throughput (6M) | p50 | p99 | p99.9 | p99.99 | max |
+|---|---|---|---|---|---|---|
+| baseline | 7.07 M cmd/s | 154 | 504 | 2604 | 4372 | 27.2 ms |
+| slab | **11.67 M cmd/s** | **90** | **361** | **650** | 4157 | 26.8 ms |
+
+- Per-run slab: p50 90, 88, 90, 94, 88; p99 361, 347, 361, 392, 348; p99.9 695, 650, 629, 633, 677; p99.99 4230, 4157, 4122, 4153, 4199; throughput 11.50, 11.78, 11.67, 11.73, 11.34.
+- p99.9: the slab is tight across runs (629-695 ns), unlike the bimodal baseline (974-2800 ns). Consistent with the baseline tail being the linear search on long levels, but not separately verified.
+- max is unchanged: it is the `accepted` set growth (same command 3,032,489), which `EngineConfig` pre-sizing removes (change 2).
+- Level length at cancel of a live order (baseline book, 5M stream, n = 1,316,328): 1: 0.1%, 2-3: 0.3%, 4-7: 1.0%, 8-15: 3.1%, 16-31: 7.1%, 32-63: 14.5%, 64-127: 23.5%, >=128: 50.3%; mean length 158.6, mean position 122.9.
+- Memory: slab 12,112 slots x 40 B (`size_of::<Slot>()`, asserted in a test) = ~0.48 MB at peak; never shrinks.
 
 ### Change 2: `EngineConfig` pre-sizing (opt-in; default benchmark stays un-sized)
 `Engine::with_config(EngineConfig { expected_accepted_ids, expected_live_orders })` sizes `accepted` and the book's `orders` map separately; `Engine::new()` is unchanged. Measured only in the latency example (`--presized`): `expected_accepted_ids` = number of NEW commands in the stream (3.65M; an upper bound on inserts, so `accepted` can never grow), `expected_live_orders` = 2 x TARGET_LIVE = 20,000. 5 pinned runs per mode, interleaved default/presized, same 6M stream (`2ba0ffeb…`), load average 1.2-1.5.

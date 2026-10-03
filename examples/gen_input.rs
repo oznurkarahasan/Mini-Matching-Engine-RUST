@@ -10,7 +10,7 @@ use std::io::{BufWriter, Write};
 use std::process::ExitCode;
 
 use assignment::loadgen::{fingerprint, write_commands, LoadGen};
-use assignment::{Command, Event};
+use assignment::{Command, Engine, Event};
 
 #[derive(Default)]
 struct Mix {
@@ -93,6 +93,8 @@ fn main() -> ExitCode {
         fingerprint(&cmds)
     );
 
+    level_histogram(&cmds);
+
     if let Some(dir) = std::path::Path::new(&path).parent() {
         if !dir.as_os_str().is_empty() {
             if let Err(e) = fs::create_dir_all(dir) {
@@ -116,4 +118,41 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Short histogram of the level length (and mean FIFO position) seen by each
+/// CANCEL of a live order: the baseline book's linear-search cost.
+fn level_histogram(cmds: &[Command]) {
+    const LABELS: [&str; 8] = [
+        "1", "2-3", "4-7", "8-15", "16-31", "32-63", "64-127", ">=128",
+    ];
+    let mut engine = Engine::new();
+    let mut out = Vec::new();
+    let mut buckets = [0u64; 8];
+    let (mut n, mut pos_sum, mut len_sum) = (0u64, 0u64, 0u64);
+    for cmd in cmds {
+        if let Command::Cancel { id } = *cmd {
+            if let Some((len, pos)) = engine.book().level_len_and_pos_of(id) {
+                let b = (usize::BITS - 1 - len.leading_zeros()).min(7) as usize;
+                buckets[b] += 1;
+                n += 1;
+                len_sum += len as u64;
+                pos_sum += pos as u64;
+            }
+        }
+        out.clear();
+        engine.process(cmd, &mut out);
+    }
+    let n_f = n.max(1) as f64;
+    let parts: Vec<String> = LABELS
+        .iter()
+        .zip(buckets)
+        .map(|(l, c)| format!("{l}: {:.1}%", 100.0 * c as f64 / n_f))
+        .collect();
+    println!(
+        "level length at cancel of a live order (n={n}): {}  | mean length {:.1}, mean position {:.1}",
+        parts.join("  "),
+        len_sum as f64 / n_f,
+        pos_sum as f64 / n_f
+    );
 }

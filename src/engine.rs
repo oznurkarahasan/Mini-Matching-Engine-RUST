@@ -38,16 +38,6 @@ impl Engine<BaselineBook> {
     pub fn new() -> Self {
         Self::with_book(BaselineBook::new())
     }
-
-    /// Engine with `accepted` and the book's live-order map pre-sized separately.
-    pub fn with_config(config: EngineConfig) -> Self {
-        let mut engine = Self::with_book(BaselineBook::with_capacity(config.expected_live_orders));
-        engine.accepted = HashSet::with_capacity_and_hasher(
-            config.expected_accepted_ids,
-            IdBuildHasher::default(),
-        );
-        engine
-    }
 }
 
 impl Default for Engine<BaselineBook> {
@@ -63,6 +53,16 @@ impl<B: Book> Engine<B> {
             accepted: HashSet::default(),
             last_trade: None,
         }
+    }
+
+    /// Engine with `accepted` and the book's live-order storage pre-sized separately.
+    pub fn with_config(config: EngineConfig) -> Self {
+        let mut engine = Self::with_book(B::with_capacity(config.expected_live_orders));
+        engine.accepted = HashSet::with_capacity_and_hasher(
+            config.expected_accepted_ids,
+            IdBuildHasher::default(),
+        );
+        engine
     }
 
     /// Read-only access to the book (used for reporting depth in benchmarks).
@@ -1085,4 +1085,5 @@ mod tests {
     }
 
     engine_tests!(baseline, crate::book::BaselineBook);
+    engine_tests!(slab, crate::book::SlabBook);
 }

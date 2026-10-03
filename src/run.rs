@@ -2,6 +2,7 @@
 
 use std::io::{self, BufRead, Write};
 
+use crate::book::Book;
 use crate::engine::Engine;
 use crate::event::{write_event, Event};
 use crate::parse::{parse_line, AccountInterner};
@@ -10,8 +11,16 @@ use crate::parse::{parse_line, AccountInterner};
 /// Returns the number of skipped lines (unparsable or invalid UTF-8).
 /// Does not flush `out`. I/O errors are returned, not skipped.
 pub fn run(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<u64> {
+    run_with(input, out, &mut Engine::new())
+}
+
+/// Same as [`run`], with a caller-supplied engine (any book, any sizing).
+pub fn run_with<B: Book>(
+    input: &mut impl BufRead,
+    out: &mut impl Write,
+    engine: &mut Engine<B>,
+) -> io::Result<u64> {
     let mut accounts = AccountInterner::new();
-    let mut engine = Engine::new();
     let mut line: Vec<u8> = Vec::new();
     let mut events: Vec<Event> = Vec::new();
     let mut skipped = 0u64;
