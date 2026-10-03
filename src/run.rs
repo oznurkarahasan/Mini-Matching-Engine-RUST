@@ -2,16 +2,17 @@
 
 use std::io::{self, BufRead, Write};
 
-use crate::book::Book;
+use crate::book::{Book, SlabBook};
 use crate::engine::Engine;
 use crate::event::{write_event, Event};
 use crate::parse::{parse_line, AccountInterner};
 
-/// Reads commands line by line from `input` and writes events to `out`.
+/// Reads commands line by line from `input` and writes events to `out`, using
+/// the default engine: `SlabBook`, un-sized (see BENCH.md row 2).
 /// Returns the number of skipped lines (unparsable or invalid UTF-8).
 /// Does not flush `out`. I/O errors are returned, not skipped.
 pub fn run(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<u64> {
-    run_with(input, out, &mut Engine::new())
+    run_with(input, out, &mut Engine::with_book(SlabBook::new()))
 }
 
 /// Same as [`run`], with a caller-supplied engine (any book, any sizing).

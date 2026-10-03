@@ -83,10 +83,11 @@ Part 3 — Performance
 - [x] Profile (perf / flamegraph), identify top bottleneck: SipHash 32.9% of engine_only, `accepted` rehash 10.8%, cancel linear search ~20%
 - [x] Custom hasher instead of SipHash (change 1, BENCH.md row 1: engine_only -35%, end_to_end -16%)
   - Order changed vs the original plan: hasher came before the slab because the profile showed hashing as the top bottleneck.
-- [ ] (in progress) EngineConfig pre-sizing (change 2): opt-in, default bench un-sized; max latency 27 ms -> ~176 µs in the latency example
+- [x] EngineConfig pre-sizing (change 2): opt-in, default bench un-sized; max latency 27 ms -> ~176 µs in the latency example
 - [ ] Open item: remaining ~176 µs max-latency outlier with pre-sizing (command 5,300,890). Unverified hypothesis: in-place rehash of the `orders` map due to tombstones from cancel churn.
-- [ ] Slab book with index-based linked lists (O(1) cancel, no repeated lookups in front/fill_front), behind the same `Book` trait (change 3)
-- [ ] (partial) Before/after numbers in BENCH.md, one change per measurement: row 1 done; slab pending; the differential test must also run on the slab book
+- [x] Slab book with index-based linked lists (O(1) cancel, no hashing in front/fill_front), behind the same `Book` trait (change 3, BENCH.md row 2: engine_only -38%, end_to_end -24%, p99.9 2.6 µs -> 650 ns); tests + differential test on both books; mutation check caught
+- [x] CLI / `run()` default switched to SlabBook (un-sized); 5M output identical; Criterion baseline `row2` saved for later changes
+- [x] Before/after numbers in BENCH.md, one change per measurement: rows 1 (hasher) and 2 (slab), change 2 section (pre-sizing); differential test runs on both books
 
 Part 4 — Write-up
 - [ ] README: design, invariants, complexity, limitations, more time, multi-instrument / multi-thread, AI use

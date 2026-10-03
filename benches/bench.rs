@@ -1,6 +1,7 @@
 //! Throughput benchmarks on a fixed synthetic stream (see `assignment::loadgen`).
 //!
-//! Each group measures both books: `baseline` (BaselineBook) and `slab` (SlabBook).
+//! Each group measures both books explicitly: `baseline` (BaselineBook) and
+//! `slab` (SlabBook, the CLI default since BENCH.md row 2).
 //! - engine_only: pre-generated `Vec<Command>`, no parsing or formatting.
 //! - end_to_end:  the same stream as text in memory -> parse -> engine -> format
 //!   into `io::sink()`.
@@ -10,7 +11,7 @@ use std::io;
 use std::time::Duration;
 
 use assignment::loadgen::{fingerprint, generate, write_commands};
-use assignment::{run, run_with, Engine, Event, SlabBook};
+use assignment::{run_with, Engine, Event, SlabBook};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 
 const N: usize = 1_000_000;
@@ -71,7 +72,11 @@ fn end_to_end(c: &mut Criterion) {
     g.sample_size(10);
     g.measurement_time(Duration::from_secs(10));
     g.bench_function("baseline", |b| {
-        b.iter(|| run(&mut black_box(&input[..]), &mut io::sink()).expect("in-memory I/O"))
+        b.iter(|| {
+            let mut engine = Engine::new();
+            run_with(&mut black_box(&input[..]), &mut io::sink(), &mut engine)
+                .expect("in-memory I/O")
+        })
     });
     g.bench_function("slab", |b| {
         b.iter(|| {

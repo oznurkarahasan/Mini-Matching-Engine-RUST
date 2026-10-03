@@ -35,7 +35,7 @@ How to reproduce:
 |---|---|---|---|---|---|---|---|---|
 | 0 | Baseline (BTreeMap + VecDeque + std HashMap/SipHash) | `41a93dfb…` / `2ba0ffeb…` | 221.9 ms / 1M = 4.51 M cmd/s | 329.6 ms / 1M = 3.03 M cmd/s | 190 ns | 644 ns | 1348 ns | Criterion baseline saved as `baseline0` (from run 5). max 37.2 ms = `accepted` set growth (see below) |
 | 1 | SplitMix64-finalizer hasher for `accepted` + `orders`; `accepted` insert-first (DECISIONS #13) | same | 143.9 ms / 1M = 6.95 M cmd/s (**-35.2%**) | 277.8 ms / 1M = 3.60 M cmd/s (**-15.7%**) | 155 ns | 503 ns | 2762 ns (noisy, see details) | max 27.7 ms (was 37.2), still `accepted` growth |
-| 2 | SlabBook (slab + index-linked FIFO per level; DECISIONS #14) | same | 82.4 ms / 1M = 12.14 M cmd/s (**-38.3%** vs baseline book in the same session) | 210.8 ms / 1M = 4.74 M cmd/s (**-24.1%**) | 90 ns | 361 ns | 650 ns | max 26.8 ms (`accepted` growth, book-independent). Not yet the CLI default |
+| 2 | SlabBook (slab + index-linked FIFO per level; DECISIONS #14) | same | 82.4 ms / 1M = 12.14 M cmd/s (**-38.3%** vs baseline book in the same session) | 210.8 ms / 1M = 4.74 M cmd/s (**-24.1%**) | 90 ns | 361 ns | 650 ns | max 26.8 ms (`accepted` growth, book-independent). CLI default since this row; Criterion baseline `row2` |
 | 3 | | | | | | | | |
 
 Superseded (old stream, MID_STEP_PCT=10, unpinned, fingerprints `f6d131f3…` / `ee234d5f…`): engine_only 189.7 ms, end_to_end 338.6 ms, p50/p99/p99.9 167/651/3223 ns. Not comparable with row 0: different stream (fewer cancels, shallower book).
@@ -72,6 +72,12 @@ Superseded (old stream, MID_STEP_PCT=10, unpinned, fingerprints `f6d131f3…` / 
 - max is unchanged: it is the `accepted` set growth (same command 3,032,489), which `EngineConfig` pre-sizing removes (change 2).
 - Level length at cancel of a live order (baseline book, 5M stream, n = 1,316,328): 1: 0.1%, 2-3: 0.3%, 4-7: 1.0%, 8-15: 3.1%, 16-31: 7.1%, 32-63: 14.5%, 64-127: 23.5%, >=128: 50.3%; mean length 158.6, mean position 122.9.
 - Memory: slab 12,112 slots x 40 B (`size_of::<Slot>()`, asserted in a test) = ~0.48 MB at peak; never shrinks.
+
+### Default switched to SlabBook (after row 2)
+- `run()` / the `engine` CLI now use `Engine::with_book(SlabBook::new())`, un-sized (`EngineConfig` stays opt-in). `Engine::new()` still builds the baseline book for comparison.
+- Bench ids name books explicitly: `*/baseline` = BaselineBook (end_to_end now calls `run_with(.., Engine::new())`), `*/slab` = SlabBook = the CLI default.
+- Behaviour check: sample test passes; `cargo run --release -- sample_input.txt | diff - sample_expected.txt` identical; release CLI output on `data/load_5000000_s42.txt` sha256 `770b6476…`, identical to the baseline-book output of rows 0-1.
+- **Criterion baseline for later changes: `row2`** (one pinned run, load average 1.2, saved with `taskset -c 2 cargo bench --bench bench -- --save-baseline row2`): engine_only/slab 76.0 ms (13.16 M cmd/s), end_to_end/slab 196.0 ms (5.10 M cmd/s); engine_only/baseline 127.6 ms, end_to_end/baseline 254.4 ms. This single run is at the fast end of the row 2 five-run range (slab engine_only 75.7-103.6 ms), so compare later changes with repeated runs (`--baseline row2`), per the noise policy.
 
 ### Change 2: `EngineConfig` pre-sizing (opt-in; default benchmark stays un-sized)
 `Engine::with_config(EngineConfig { expected_accepted_ids, expected_live_orders })` sizes `accepted` and the book's `orders` map separately; `Engine::new()` is unchanged. Measured only in the latency example (`--presized`): `expected_accepted_ids` = number of NEW commands in the stream (3.65M; an upper bound on inserts, so `accepted` can never grow), `expected_live_orders` = 2 x TARGET_LIVE = 20,000. 5 pinned runs per mode, interleaved default/presized, same 6M stream (`2ba0ffeb…`), load average 1.2-1.5.
