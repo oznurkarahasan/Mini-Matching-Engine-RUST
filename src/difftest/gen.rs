@@ -1,4 +1,5 @@
 //! Deterministic random command streams for the differential test.
+//! The distributions and their rationale are documented in README §5.
 
 use crate::command::Command;
 use crate::event::Event;

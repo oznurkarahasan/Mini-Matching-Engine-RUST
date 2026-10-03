@@ -32,7 +32,7 @@
 
 ## 6. Event output and testable book interface
 - Decision: the engine pushes events into a reused `Vec<Event>`; the CLI formats them with `BufWriter`. The book sits behind a small internal interface so both baseline and optimized versions run against the same reference test.
-- Why: no allocation per command in steady state; formatting kept out of the engine; one differential test covers both books.
+- Why: no per-order allocation once the slab, maps and event buffer have reached capacity (new price levels and new accounts still allocate); formatting kept out of the engine; one differential test covers both books.
 - Alternative considered: generic `FnMut(Event)` sink; writing text directly from the engine.
 - Result / evidence: tests `formats_every_event`, `process_appends_without_clearing`; one differential test covers both books (#10, #14).
 

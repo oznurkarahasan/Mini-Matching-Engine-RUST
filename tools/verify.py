@@ -3,6 +3,10 @@
 
 Generates random command files, runs your `engine` binary on each one and compares
 its stdout byte for byte with an independent Python reference implementation.
+The reference is an independent black-box reference written directly from the
+spec by the second AI used for design discussions, not by the coding assistant.
+It shares no code with the engine but follows the same spec interpretations
+listed in README §4, so it cannot catch a misreading that both share.
 
 Usage:
     python3 tools/verify.py ./target/release/engine [--streams 500] [--len 2000] [--seed 1]
