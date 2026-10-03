@@ -83,6 +83,7 @@ fn main() {
         black_box(&out);
         *s = nanos_since(t0, t1);
     }
+    let top = top_samples(&samples, 5);
     report("engine", &mut samples);
 
     let book = engine.book();
@@ -91,4 +92,67 @@ fn main() {
         book.order_count(),
         book.level_count()
     );
+
+    explain_outliers(&cmds, warmup, &top);
+}
+
+/// The `k` largest samples as (value_ns, measured_index), largest first.
+fn top_samples(samples: &[u64], k: usize) -> Vec<(u64, usize)> {
+    let mut idx: Vec<(u64, usize)> = samples.iter().copied().zip(0..).collect();
+    idx.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    idx.truncate(k);
+    idx
+}
+
+/// For each outlier: how many ids had been accepted (= `accepted` set size)
+/// right after that command, the live count, and whether that command's insert
+/// is exactly where a std `HashSet<u64>` grows (found by simulation with the
+/// public `capacity()`, not by assuming a load factor).
+fn explain_outliers(cmds: &[assignment::Command], warmup: usize, top: &[(u64, usize)]) {
+    use std::collections::HashSet;
+
+    let last = top.iter().map(|&(_, i)| warmup + i).max().unwrap_or(0);
+    // Replay on a fresh engine, recording accepted count and live count per command.
+    let mut engine = Engine::new();
+    let mut out = Vec::new();
+    let mut accepted = 0usize;
+    let mut live_peak = 0usize;
+    let mut per_cmd = Vec::with_capacity(last + 1);
+    for cmd in &cmds[..=last] {
+        out.clear();
+        engine.process(cmd, &mut out);
+        accepted += out
+            .iter()
+            .filter(|e| matches!(e, Event::Ack { .. }))
+            .count();
+        live_peak = live_peak.max(engine.book().order_count());
+        per_cmd.push((accepted, engine.book().order_count(), live_peak));
+    }
+
+    // Sizes at which std HashSet<u64> reallocates (len after the insert that grew it).
+    let max_accepted = per_cmd.last().map(|p| p.0).unwrap_or(0);
+    let mut growth_at = Vec::new();
+    let mut sim: HashSet<u64> = HashSet::new();
+    for k in 0..max_accepted as u64 {
+        let before = sim.capacity();
+        sim.insert(k);
+        if sim.capacity() != before {
+            growth_at.push(sim.len());
+        }
+    }
+    let big: Vec<usize> = growth_at.iter().copied().filter(|&g| g > 100_000).collect();
+    println!("std HashSet<u64> grows when len reaches: {big:?} (sizes > 100k shown)");
+
+    for &(ns, i) in top {
+        let ci = warmup + i;
+        let (acc, live, peak) = per_cmd[ci];
+        let (acc_before, _, peak_before) = if ci > 0 { per_cmd[ci - 1] } else { (0, 0, 0) };
+        let accepted_grew = acc > acc_before && growth_at.contains(&acc);
+        let orders_new_peak = peak > peak_before;
+        println!(
+            "outlier {ns:>10} ns at command {ci} ({:?}): accepted {acc_before}->{acc}, \
+             accepted-set growth point: {accepted_grew}; live {live}, new live peak: {orders_new_peak}",
+            cmds[ci]
+        );
+    }
 }

@@ -2,7 +2,7 @@
 //! Not part of the engine API; the engine never depends on this module.
 //!
 //! Load model (see README for the rationale):
-//! - Mid price random-walks (±1 tick with 10% probability per command).
+//! - Mid price random-walks (±1 tick with `MID_STEP_PCT` = 1% probability per command).
 //! - NEW: 80% passive, 1-20 ticks behind the mid (mostly 1-5); 20% marketable,
 //!   0-5 ticks through the mid. Qty skewed small (1-100). 50 accounts.
 //!   Ids are fresh and increasing; ~0.5% deliberate rejects (duplicate id / zero qty).
@@ -72,6 +72,11 @@ const START_MID: Price = 10_000;
 const UNKNOWN_BASE: OrderId = 1 << 40;
 /// "Recent" window for cancel/modify targets.
 const RECENT: u64 = 1_000;
+/// Probability (percent) that the mid moves one tick per command. This is the
+/// mix knob: most fills come from resting orders becoming crossable as the mid
+/// drifts, so lower volatility -> fewer fills -> live count nearer
+/// `TARGET_LIVE` -> cancel share nearer 30%.
+pub const MID_STEP_PCT: u64 = 1;
 
 /// Which population a CANCEL/MODIFY target is drawn from.
 #[derive(Clone, Copy)]
@@ -148,7 +153,7 @@ impl LoadGen {
     }
 
     fn walk_mid(&mut self) {
-        if self.rng.percent(10) {
+        if self.rng.percent(MID_STEP_PCT) {
             self.mid = if self.rng.percent(50) {
                 self.mid + 1
             } else {
