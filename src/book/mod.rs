@@ -22,13 +22,11 @@ pub trait Book {
     /// Oldest order at the best price on `resting_side`, if any.
     fn front(&self, resting_side: Side) -> Option<Resting>;
 
-    /// Reduces the front order on `resting_side` by `qty`.
-    /// Precondition: side non-empty and `0 < qty < front.remaining`.
-    fn reduce_front(&mut self, resting_side: Side, qty: Qty);
-
-    /// Removes the front order on `resting_side`; drops its level if it becomes empty.
-    /// Precondition: side non-empty.
-    fn pop_front(&mut self, resting_side: Side);
+    /// Fills `qty` of the front order on `resting_side`. If its remaining
+    /// quantity reaches zero, the order is removed, and its level too if empty.
+    /// Precondition: side non-empty and `0 < qty <= front.remaining`; if
+    /// violated in release the book is left unchanged.
+    fn fill_front(&mut self, resting_side: Side, qty: Qty);
 
     /// Appends `order` at the back of its price level on `resting_side`.
     /// Precondition: `order.id` is not live and `order.remaining > 0`.

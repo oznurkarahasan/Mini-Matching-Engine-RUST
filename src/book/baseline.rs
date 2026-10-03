@@ -38,37 +38,36 @@ impl Book for BaselineBook {
         self.orders.get(id).copied()
     }
 
-    fn reduce_front(&mut self, resting_side: Side, qty: Qty) {
-        let id = self
-            .best_queue(resting_side)
-            .and_then(|q| q.front().copied());
-        debug_assert!(id.is_some(), "reduce_front on empty side");
-        let Some(order) = id.and_then(|id| self.orders.get_mut(&id)) else {
-            return;
-        };
-        debug_assert!(
-            qty > 0 && qty < order.remaining,
-            "reduce_front: qty {qty} not in 1..{}",
-            order.remaining
-        );
-        order.remaining -= qty;
-    }
-
-    fn pop_front(&mut self, resting_side: Side) {
+    fn fill_front(&mut self, resting_side: Side, qty: Qty) {
         let entry = match resting_side {
             Side::Buy => self.bids.last_entry(),
             Side::Sell => self.asks.first_entry(),
         };
-        debug_assert!(entry.is_some(), "pop_front on empty side");
-        let Some(mut entry) = entry else {
+        debug_assert!(entry.is_some(), "fill_front on empty side");
+        let Some(mut level) = entry else {
             return;
         };
-        let id = entry.get_mut().pop_front();
-        if entry.get().is_empty() {
-            entry.remove();
+        let Some(order) = level.get().front().and_then(|id| self.orders.get_mut(id)) else {
+            debug_assert!(false, "front id not live");
+            return;
+        };
+        debug_assert!(
+            qty > 0 && qty <= order.remaining,
+            "fill_front: qty {qty} not in 1..={}",
+            order.remaining
+        );
+        let Some(left) = order.remaining.checked_sub(qty) else {
+            return;
+        };
+        if left > 0 {
+            order.remaining = left;
+            return;
         }
-        if let Some(id) = id {
-            self.orders.remove(&id);
+        let id = order.id;
+        self.orders.remove(&id);
+        level.get_mut().pop_front();
+        if level.get().is_empty() {
+            level.remove();
         }
     }
 

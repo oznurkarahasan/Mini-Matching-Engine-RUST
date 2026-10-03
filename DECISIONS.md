@@ -1,4 +1,4 @@
-# DECISIONS (2-4 lines each: what, why, alternative, result)
+# DECISIONS
 
 ## 1. STP-canceled orders consume their id
 - Decision: an order canceled by self-trade prevention counts as accepted; its id is consumed. All accepted ids live in a separate set.
@@ -54,4 +54,14 @@
 - Alternative considered: one reason type per event (wrong combinations unrepresentable).
 - Result / evidence: rule tests.
 
-<!-- Copy the block for each decision. Write it when you decide, not at the end. -->
+## 10. Reference engine and differential test live under src/
+- Decision: the reference engine and the randomized differential test go in a `#[cfg(test)]` module under `src/`, not in `tests/`.
+- Why: `check_invariants` is `#[cfg(test)]` only, which is not set for integration tests; a unit-test module can call it after every command, and release/bench builds stay free of it.
+- Alternative considered: a cargo feature (e.g. `invariants`) enabled by `tests/`.
+- Result / evidence: TBD (Part 2).
+
+## 11. `fill_front` replaces `reduce_front` + `pop_front`
+- Decision: one `Book::fill_front(resting_side, qty)` subtracts with `checked_sub` and removes the order (and its level if empty) when it reaches zero; `debug_assert!(qty <= remaining)`.
+- Why: the engine no longer chooses between reduce and pop, so the silent-wrap path in release disappears and the trait is smaller.
+- Alternative considered: separate reduce/pop methods (previous version).
+- Result / evidence: matching + STP tests.

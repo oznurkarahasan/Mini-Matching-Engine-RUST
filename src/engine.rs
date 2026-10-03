@@ -93,7 +93,13 @@ impl<B: Book> Engine<B> {
             if !crosses(side, price, maker.price) {
                 break;
             }
-            // Self-trade prevention is added in step 5.
+            // Self-trade prevention, cancel-newest: drop the incoming remainder
+            // and stop. Earlier trades stay; last_trade and the book are untouched.
+            if maker.account == account {
+                out.push(Event::Canceled { id, remaining });
+                remaining = 0;
+                break;
+            }
             let fill = remaining.min(maker.remaining);
             out.push(Event::Trade {
                 taker: id,
@@ -103,11 +109,7 @@ impl<B: Book> Engine<B> {
             });
             self.last_trade = Some(maker.price);
             remaining -= fill;
-            if fill == maker.remaining {
-                self.book.pop_front(resting_side);
-            } else {
-                self.book.reduce_front(resting_side, fill);
-            }
+            self.book.fill_front(resting_side, fill);
         }
 
         if remaining > 0 {
@@ -170,6 +172,57 @@ mod tests {
 
     fn sell(id: OrderId, price: Price, qty: Qty) -> Command {
         order(id, Side::Sell, price, qty)
+    }
+
+    /// Shared account for STP tests; far above any test order id, so it never
+    /// collides with the id-derived default accounts.
+    const SHARED: AccountId = 1_000_000;
+
+    fn buy_as(id: OrderId, account: AccountId, price: Price, qty: Qty) -> Command {
+        Command::New {
+            id,
+            account,
+            side: Side::Buy,
+            price,
+            qty,
+        }
+    }
+
+    fn sell_as(id: OrderId, account: AccountId, price: Price, qty: Qty) -> Command {
+        Command::New {
+            id,
+            account,
+            side: Side::Sell,
+            price,
+            qty,
+        }
+    }
+
+    /// Compares the full event list; on mismatch prints both as output lines.
+    #[track_caller]
+    fn assert_events(out: &[Event], expected: &[Event]) {
+        fn lines(events: &[Event]) -> String {
+            let mut buf = Vec::new();
+            for e in events {
+                crate::event::write_event(&mut buf, e).expect("writing to a Vec cannot fail");
+            }
+            String::from_utf8_lossy(&buf).into_owned()
+        }
+        assert!(
+            out == expected,
+            "events differ\n--- got ---\n{}--- expected ---\n{}",
+            lines(out),
+            lines(expected)
+        );
+    }
+
+    fn canceled(id: OrderId, remaining: Qty) -> Event {
+        Event::Canceled { id, remaining }
+    }
+
+    /// (id, remaining) of the front order on `side`, ignoring account and price.
+    fn front_of(e: &Engine<BaselineBook>, side: Side) -> Option<(OrderId, Qty)> {
+        e.book.front(side).map(|r| (r.id, r.remaining))
     }
 
     /// Runs `cmds`, checking all invariants after every command.
@@ -471,5 +524,136 @@ mod tests {
     fn no_price_band_before_first_trade() {
         let out = run(&mut Engine::new(), &[buy(1, 1, 1), buy(2, u64::MAX, 1)]);
         assert_eq!(out, [ack(1), ack(2)]);
+    }
+
+    // ---- Self-trade prevention ----
+
+    #[test]
+    fn stp_on_first_match_cancels_whole_order() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[sell_as(1, SHARED, 100, 5), buy_as(2, SHARED, 100, 3)],
+        );
+        assert_events(&out, &[ack(1), ack(2), canceled(2, 3)]);
+        assert_eq!(front_of(&e, Side::Sell), Some((1, 5)));
+        assert_eq!(front_of(&e, Side::Buy), None);
+        assert_eq!(e.last_trade, None);
+    }
+
+    #[test]
+    fn stp_on_sell_side() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[buy_as(1, SHARED, 100, 5), sell_as(2, SHARED, 99, 4)],
+        );
+        assert_events(&out, &[ack(1), ack(2), canceled(2, 4)]);
+        assert_eq!(front_of(&e, Side::Buy), Some((1, 5)));
+        assert_eq!(front_of(&e, Side::Sell), None);
+    }
+
+    #[test]
+    fn stp_mid_sweep_keeps_earlier_trades_and_last_trade() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[
+                sell(1, 100, 2),
+                sell_as(2, SHARED, 101, 5),
+                sell(3, 101, 5),
+                buy_as(4, SHARED, 102, 10),
+            ],
+        );
+        assert_events(
+            &out,
+            &[
+                ack(1),
+                ack(2),
+                ack(3),
+                ack(4),
+                trade(4, 1, 100, 2),
+                canceled(4, 8),
+            ],
+        );
+        // The own order and the one behind it are untouched; nothing rests for 4.
+        assert_eq!(front_of(&e, Side::Sell), Some((2, 5)));
+        assert_eq!(front_of(&e, Side::Buy), None);
+        assert_eq!(e.last_trade, Some(100));
+    }
+
+    #[test]
+    fn stp_stops_even_if_other_accounts_wait_behind_own_order() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[
+                sell_as(1, SHARED, 100, 5),
+                sell(2, 100, 5),
+                buy_as(3, SHARED, 100, 5),
+            ],
+        );
+        assert_events(&out, &[ack(1), ack(2), ack(3), canceled(3, 5)]);
+        assert_eq!(front_of(&e, Side::Sell), Some((1, 5)));
+    }
+
+    #[test]
+    fn non_crossing_own_order_does_not_trigger_stp() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[sell_as(1, SHARED, 105, 5), buy_as(2, SHARED, 100, 5)],
+        );
+        assert_events(&out, &[ack(1), ack(2)]);
+        assert_eq!(front_of(&e, Side::Buy), Some((2, 5)));
+        assert_eq!(front_of(&e, Side::Sell), Some((1, 5)));
+    }
+
+    #[test]
+    fn fully_filled_before_own_order_emits_no_cancel() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[
+                sell(1, 100, 5),
+                sell_as(2, SHARED, 100, 5),
+                buy_as(3, SHARED, 100, 5),
+            ],
+        );
+        assert_events(&out, &[ack(1), ack(2), ack(3), trade(3, 1, 100, 5)]);
+        assert_eq!(front_of(&e, Side::Sell), Some((2, 5)));
+        assert_eq!(front_of(&e, Side::Buy), None);
+    }
+
+    #[test]
+    fn stp_canceled_id_is_consumed() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[
+                sell_as(1, SHARED, 100, 5),
+                buy_as(2, SHARED, 100, 3),
+                buy(2, 90, 1),
+            ],
+        );
+        assert_events(
+            &out,
+            &[
+                ack(1),
+                ack(2),
+                canceled(2, 3),
+                reject(2, Reason::DuplicateId),
+            ],
+        );
+    }
+
+    #[test]
+    fn stp_does_not_change_existing_last_trade() {
+        let mut e = engine_with_last_trade(100);
+        run(
+            &mut e,
+            &[sell_as(1, SHARED, 105, 5), buy_as(2, SHARED, 105, 5)],
+        );
+        assert_eq!(e.last_trade, Some(100));
     }
 }
