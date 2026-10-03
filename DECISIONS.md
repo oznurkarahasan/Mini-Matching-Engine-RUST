@@ -65,3 +65,9 @@
 - Why: the engine no longer chooses between reduce and pop, so the silent-wrap path in release disappears and the trait is smaller.
 - Alternative considered: separate reduce/pop methods (previous version).
 - Result / evidence: matching + STP tests.
+
+## 12. MODIFY priority rule lives in Engine; Book has `set_qty` and `move_to_back`
+- Decision: the engine decides priority (`new_qty <= remaining` keeps it, larger loses it) and calls either `Book::set_qty(id, q)` (position kept) or `Book::move_to_back(id, q)`.
+- Why: the priority rule is a spec rule; consistent with #7, the book only stores. A single `modify(id, q, keep_priority)` would push the rule into every book implementation.
+- Alternative considered: one `modify` method with a boolean flag.
+- Result / evidence: MODIFY tests (priority shown by which maker trades next).

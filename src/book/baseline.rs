@@ -123,6 +123,44 @@ impl Book for BaselineBook {
         Some(resting.remaining)
     }
 
+    fn get_remaining(&self, id: OrderId) -> Option<Qty> {
+        self.orders.get(&id).map(|o| o.resting.remaining)
+    }
+
+    fn set_qty(&mut self, id: OrderId, new_qty: Qty) {
+        let Some(order) = self.orders.get_mut(&id) else {
+            debug_assert!(false, "set_qty on non-live id {id}");
+            return;
+        };
+        debug_assert!(
+            0 < new_qty && new_qty <= order.resting.remaining,
+            "set_qty: {new_qty} not in 1..={}",
+            order.resting.remaining
+        );
+        order.resting.remaining = new_qty;
+    }
+
+    fn move_to_back(&mut self, id: OrderId, new_qty: Qty) {
+        debug_assert!(new_qty > 0, "move_to_back with zero quantity");
+        let Some(order) = self.orders.get_mut(&id) else {
+            debug_assert!(false, "move_to_back on non-live id {id}");
+            return;
+        };
+        order.resting.remaining = new_qty;
+        let (side, price) = (order.side, order.resting.price);
+        let Some(queue) = self.levels_mut(side).get_mut(&price) else {
+            debug_assert!(false, "live id {id} has no level");
+            return;
+        };
+        // Same O(level length) linear search as `remove`; see DECISIONS.md #4, #5.
+        let pos = queue.iter().position(|&q| q == id);
+        debug_assert!(pos.is_some(), "live id {id} not in its level");
+        if let Some(pos) = pos {
+            queue.remove(pos);
+            queue.push_back(id);
+        }
+    }
+
     #[cfg(test)]
     fn check_invariants(&self) {
         use std::collections::HashSet;

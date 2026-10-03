@@ -57,8 +57,7 @@ impl<B: Book> Engine<B> {
                     reason: Reason::UnknownOrder,
                 },
             }),
-            // MODIFY is implemented in step 7.
-            Command::Modify { .. } => {}
+            Command::Modify { id, new_qty } => self.process_modify(id, new_qty, out),
         }
     }
 
@@ -130,6 +129,31 @@ impl<B: Book> Engine<B> {
                 },
             );
         }
+    }
+
+    /// `new_qty` is the new remaining quantity. Not larger than the current
+    /// remaining keeps queue priority; larger loses it. Never triggers matching.
+    fn process_modify(&mut self, id: OrderId, new_qty: Qty, out: &mut Vec<Event>) {
+        let Some(remaining) = self.book.get_remaining(id) else {
+            out.push(Event::ModifyReject {
+                id,
+                reason: Reason::UnknownOrder,
+            });
+            return;
+        };
+        if new_qty == 0 {
+            out.push(Event::ModifyReject {
+                id,
+                reason: Reason::InvalidValue,
+            });
+            return;
+        }
+        if new_qty <= remaining {
+            self.book.set_qty(id, new_qty);
+        } else {
+            self.book.move_to_back(id, new_qty);
+        }
+        out.push(Event::Modified { id, new_qty });
     }
 
     /// Book invariants plus: every live order was accepted.
@@ -791,6 +815,193 @@ mod tests {
                 ack(4),
                 trade(4, 1, 100, 2),
                 trade(4, 3, 100, 2),
+            ],
+        );
+    }
+
+    // ---- MODIFY ----
+
+    fn modify(id: OrderId, new_qty: Qty) -> Command {
+        Command::Modify { id, new_qty }
+    }
+
+    fn modified(id: OrderId, new_qty: Qty) -> Event {
+        Event::Modified { id, new_qty }
+    }
+
+    fn modify_reject(id: OrderId, reason: Reason) -> Event {
+        Event::ModifyReject { id, reason }
+    }
+
+    #[test]
+    fn modify_unknown_id() {
+        let out = run(&mut Engine::new(), &[modify(42, 3)]);
+        assert_events(&out, &[modify_reject(42, Reason::UnknownOrder)]);
+    }
+
+    #[test]
+    fn modify_unknown_is_checked_before_invalid_value() {
+        let out = run(&mut Engine::new(), &[modify(42, 0)]);
+        assert_events(&out, &[modify_reject(42, Reason::UnknownOrder)]);
+    }
+
+    #[test]
+    fn modify_to_zero_is_invalid_and_leaves_order_unchanged() {
+        let mut e = Engine::new();
+        let out = run(&mut e, &[sell(1, 100, 5), modify(1, 0)]);
+        assert_events(&out, &[ack(1), modify_reject(1, Reason::InvalidValue)]);
+        assert_eq!(front_of(&e, Side::Sell), Some((1, 5)));
+    }
+
+    #[test]
+    fn modify_decrease_keeps_priority() {
+        let out = run(
+            &mut Engine::new(),
+            &[
+                sell(1, 100, 5),
+                sell(2, 100, 5),
+                modify(1, 3),
+                buy(3, 100, 4),
+            ],
+        );
+        assert_events(
+            &out,
+            &[
+                ack(1),
+                ack(2),
+                modified(1, 3),
+                ack(3),
+                trade(3, 1, 100, 3),
+                trade(3, 2, 100, 1),
+            ],
+        );
+    }
+
+    #[test]
+    fn modify_equal_keeps_priority() {
+        let out = run(
+            &mut Engine::new(),
+            &[
+                sell(1, 100, 5),
+                sell(2, 100, 5),
+                modify(1, 5),
+                buy(3, 100, 5),
+            ],
+        );
+        assert_events(
+            &out,
+            &[ack(1), ack(2), modified(1, 5), ack(3), trade(3, 1, 100, 5)],
+        );
+    }
+
+    #[test]
+    fn modify_increase_loses_priority() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[
+                sell(1, 100, 5),
+                sell(2, 100, 5),
+                modify(1, 6),
+                buy(3, 100, 5),
+            ],
+        );
+        assert_events(
+            &out,
+            &[ack(1), ack(2), modified(1, 6), ack(3), trade(3, 2, 100, 5)],
+        );
+        assert_eq!(front_of(&e, Side::Sell), Some((1, 6)));
+    }
+
+    #[test]
+    fn modify_compares_with_remaining_not_original_qty() {
+        // Order 1: original 10, remaining 4 after a fill. 8 < 10 but > 4, so it
+        // is an increase and loses priority to order 3.
+        let out = run(
+            &mut Engine::new(),
+            &[
+                sell(1, 100, 10),
+                buy(2, 100, 6),
+                sell(3, 100, 5),
+                modify(1, 8),
+                buy(4, 100, 5),
+            ],
+        );
+        assert_events(
+            &out,
+            &[
+                ack(1),
+                ack(2),
+                trade(2, 1, 100, 6),
+                ack(3),
+                modified(1, 8),
+                ack(4),
+                trade(4, 3, 100, 5),
+            ],
+        );
+    }
+
+    #[test]
+    fn modify_increase_on_only_order_in_level() {
+        let mut e = Engine::new();
+        let out = run(
+            &mut e,
+            &[
+                sell(1, 100, 5),
+                sell(2, 101, 1),
+                modify(1, 9),
+                buy(3, 100, 9),
+            ],
+        );
+        assert_events(
+            &out,
+            &[ack(1), ack(2), modified(1, 9), ack(3), trade(3, 1, 100, 9)],
+        );
+        assert_eq!(front_of(&e, Side::Sell), Some((2, 1)));
+    }
+
+    #[test]
+    fn modify_never_matches() {
+        let mut e = Engine::new();
+        let out = run(&mut e, &[buy(1, 99, 5), sell(2, 100, 5), modify(1, 50)]);
+        assert_events(&out, &[ack(1), ack(2), modified(1, 50)]);
+        assert_eq!(front_of(&e, Side::Buy), Some((1, 50)));
+        assert_eq!(front_of(&e, Side::Sell), Some((2, 5)));
+        assert_eq!(e.last_trade, None);
+    }
+
+    #[test]
+    fn modify_filled_canceled_and_stp_canceled_orders() {
+        let out = run(
+            &mut Engine::new(),
+            &[
+                sell(1, 100, 5),
+                buy(2, 100, 5),
+                buy(3, 90, 5),
+                cancel(3),
+                sell_as(4, SHARED, 110, 5),
+                buy_as(5, SHARED, 110, 5),
+                modify(1, 1),
+                modify(2, 1),
+                modify(3, 1),
+                modify(5, 1),
+            ],
+        );
+        assert_events(
+            &out,
+            &[
+                ack(1),
+                ack(2),
+                trade(2, 1, 100, 5),
+                ack(3),
+                canceled(3, 5),
+                ack(4),
+                ack(5),
+                canceled(5, 5),
+                modify_reject(1, Reason::UnknownOrder),
+                modify_reject(2, Reason::UnknownOrder),
+                modify_reject(3, Reason::UnknownOrder),
+                modify_reject(5, Reason::UnknownOrder),
             ],
         );
     }

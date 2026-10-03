@@ -36,6 +36,17 @@ pub trait Book {
     /// Returns its remaining quantity, or `None` if `id` is not live.
     fn remove(&mut self, id: OrderId) -> Option<Qty>;
 
+    /// Remaining quantity of the live order `id`, or `None` if not live.
+    fn get_remaining(&self, id: OrderId) -> Option<Qty>;
+
+    /// Sets the remaining quantity of `id`, keeping its queue position.
+    /// Precondition: `id` is live and `0 < new_qty <= remaining`.
+    fn set_qty(&mut self, id: OrderId, new_qty: Qty);
+
+    /// Sets the remaining quantity of `id` and moves it to the back of its level.
+    /// Precondition: `id` is live and `new_qty > 0`.
+    fn move_to_back(&mut self, id: OrderId, new_qty: Qty);
+
     /// Panics if the book's internal structure is inconsistent.
     #[cfg(test)]
     fn check_invariants(&self);

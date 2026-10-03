@@ -66,11 +66,11 @@ comes first and speed second.
 Part 1 — Correctness
 - [x] 1. Types, Command, parser (`parse_line`, `AccountInterner`) + tests
 - [x] 2. Events + `write_event`, CLI skeleton (`run`, `main`), sample test (ignored)
-- [ ] 3. Engine NEW checks: DUPLICATE_ID, INVALID_VALUE, PRICE_BAND; ACK; accepted-id set
-- [ ] 4. `Book` trait + `BaselineBook`, matching without STP, `check_invariants` (test only); price band tests
-- [ ] 5. Self-trade prevention (cancel-newest) + tests
-- [ ] 6. CANCEL + tests
-- [ ] 7. MODIFY + tests; un-ignore sample test; `cargo run --release -- sample_input.txt | diff - sample_expected.txt`
+- [x] 3. Engine NEW checks: DUPLICATE_ID, INVALID_VALUE, PRICE_BAND; ACK; accepted-id set
+- [x] 4. `Book` trait + `BaselineBook`, matching without STP, `check_invariants` (test only); price band tests
+- [x] 5. Self-trade prevention (cancel-newest) + tests
+- [x] 6. CANCEL + tests
+- [x] 7. MODIFY + tests; un-ignore sample test; `cargo run --release -- sample_input.txt | diff - sample_expected.txt`
 
 Part 2 — Verification
 - [ ] Simple reference engine in test code

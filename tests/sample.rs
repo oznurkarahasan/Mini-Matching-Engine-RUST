@@ -1,7 +1,6 @@
 use assignment::run;
 
 #[test]
-#[ignore = "engine not implemented yet; un-ignore in step 7"]
 fn sample_matches_expected_byte_for_byte() {
     let input = include_str!("../sample_input.txt");
     let expected = include_str!("../sample_expected.txt");
