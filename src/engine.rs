@@ -158,7 +158,7 @@ impl<B: Book> Engine<B> {
 
     /// Book invariants plus: every live order was accepted.
     #[cfg(test)]
-    fn check_invariants(&self) {
+    pub(crate) fn check_invariants(&self) {
         self.book.check_invariants();
         for id in self.book.live_ids() {
             assert!(self.accepted.contains(&id), "live id {id} not accepted");

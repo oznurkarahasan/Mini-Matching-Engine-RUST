@@ -73,8 +73,8 @@ Part 1 — Correctness
 - [x] 7. MODIFY + tests; un-ignore sample test; `cargo run --release -- sample_input.txt | diff - sample_expected.txt`
 
 Part 2 — Verification
-- [ ] Simple reference engine in test code
-- [ ] Randomized differential test (reference vs engine), distributions documented in README
+- [x] Simple reference engine in test code
+- [x] Randomized differential test (reference vs engine), distributions documented in README
 
 Part 3 — Performance
 - [ ] Load generator (1M-10M commands, ~60/30/10 NEW/CANCEL/MODIFY, moving mid, dozens of accounts)

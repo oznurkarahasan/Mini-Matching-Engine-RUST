@@ -6,6 +6,9 @@ pub mod parse;
 pub mod run;
 pub mod types;
 
+#[cfg(test)]
+mod difftest;
+
 pub use command::Command;
 pub use engine::Engine;
 pub use event::{write_event, Event, Reason};
