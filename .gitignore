@@ -2,7 +2,3 @@
 /target-prof
 /data
 /verify_fail
-perf.data*
-flamegraph.svg
-*.profraw
-.vscode/

@@ -18,9 +18,8 @@ pub struct Resting {
     pub remaining: Qty,
 }
 
-/// Preconditions are internal invariants guaranteed by `Engine`; a violation
-/// panics with a clear message (in release too) instead of being ignored.
-/// Input errors never reach the book.
+/// Preconditions are checked with `debug_assert!` only: zero cost and no
+/// panics in release builds.
 pub trait Book {
     /// Empty book with live-order storage pre-sized for `expected_live_orders`.
     fn with_capacity(expected_live_orders: usize) -> Self
@@ -32,7 +31,8 @@ pub trait Book {
 
     /// Fills `qty` of the front order on `resting_side`. If its remaining
     /// quantity reaches zero, the order is removed, and its level too if empty.
-    /// Precondition: side non-empty and `0 < qty <= front.remaining`.
+    /// Precondition: side non-empty and `0 < qty <= front.remaining`; if
+    /// violated in release the book is left unchanged.
     fn fill_front(&mut self, resting_side: Side, qty: Qty);
 
     /// Appends `order` at the back of its price level on `resting_side`.

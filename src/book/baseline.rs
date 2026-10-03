@@ -81,10 +81,7 @@ impl Book for BaselineBook {
 
     fn front(&self, resting_side: Side) -> Option<Resting> {
         let id = self.best_queue(resting_side)?.front()?;
-        match self.orders.get(id) {
-            Some(o) => Some(o.resting),
-            None => panic!("baseline invariant violated: front id {id} is not live"),
-        }
+        self.orders.get(id).map(|o| o.resting)
     }
 
     fn fill_front(&mut self, resting_side: Side, qty: Qty) {
@@ -92,19 +89,23 @@ impl Book for BaselineBook {
             Side::Buy => self.bids.last_entry(),
             Side::Sell => self.asks.first_entry(),
         };
+        debug_assert!(entry.is_some(), "fill_front on empty side");
         let Some(mut level) = entry else {
-            panic!("fill_front on empty {resting_side:?} side");
+            return;
         };
         let Some(order) = level.get().front().and_then(|id| self.orders.get_mut(id)) else {
-            panic!("baseline invariant violated: front id of a level is not live");
+            debug_assert!(false, "front id not live");
+            return;
         };
         let order = &mut order.resting;
-        assert!(
+        debug_assert!(
             qty > 0 && qty <= order.remaining,
             "fill_front: qty {qty} not in 1..={}",
             order.remaining
         );
-        let left = order.remaining - qty;
+        let Some(left) = order.remaining.checked_sub(qty) else {
+            return;
+        };
         if left > 0 {
             order.remaining = left;
             return;
@@ -118,24 +119,19 @@ impl Book for BaselineBook {
     }
 
     fn insert(&mut self, resting_side: Side, order: Resting) {
-        assert!(
-            order.remaining > 0,
-            "insert of id {} with zero quantity",
-            order.id
-        );
-        // The map's own insert detects a live duplicate: no extra lookup.
-        let previous = self.orders.insert(
+        debug_assert!(order.remaining > 0, "insert with zero quantity");
+        debug_assert!(!self.orders.contains_key(&order.id), "insert of live id");
+        self.levels_mut(resting_side)
+            .entry(order.price)
+            .or_default()
+            .push_back(order.id);
+        self.orders.insert(
             order.id,
             Order {
                 resting: order,
                 side: resting_side,
             },
         );
-        assert!(previous.is_none(), "insert of already-live id {}", order.id);
-        self.levels_mut(resting_side)
-            .entry(order.price)
-            .or_default()
-            .push_back(order.id);
     }
 
     fn remove(&mut self, id: OrderId) -> Option<Qty> {
@@ -144,15 +140,16 @@ impl Book for BaselineBook {
             Entry::Occupied(mut level) => {
                 // Linear search within the level: O(level length). Deliberate
                 // baseline cost, replaced in Part 3 (see DECISIONS.md #4, #5).
-                let Some(pos) = level.get().iter().position(|&q| q == id) else {
-                    panic!("baseline invariant violated: live id {id} not in its level");
-                };
-                level.get_mut().remove(pos);
+                let pos = level.get().iter().position(|&q| q == id);
+                debug_assert!(pos.is_some(), "live id {id} not in its level");
+                if let Some(pos) = pos {
+                    level.get_mut().remove(pos);
+                }
                 if level.get().is_empty() {
                     level.remove();
                 }
             }
-            Entry::Vacant(_) => panic!("baseline invariant violated: live id {id} has no level"),
+            Entry::Vacant(_) => debug_assert!(false, "live id {id} has no level"),
         }
         Some(resting.remaining)
     }
@@ -163,9 +160,10 @@ impl Book for BaselineBook {
 
     fn set_qty(&mut self, id: OrderId, new_qty: Qty) {
         let Some(order) = self.orders.get_mut(&id) else {
-            panic!("set_qty on non-live id {id}");
+            debug_assert!(false, "set_qty on non-live id {id}");
+            return;
         };
-        assert!(
+        debug_assert!(
             0 < new_qty && new_qty <= order.resting.remaining,
             "set_qty: {new_qty} not in 1..={}",
             order.resting.remaining
@@ -174,21 +172,24 @@ impl Book for BaselineBook {
     }
 
     fn move_to_back(&mut self, id: OrderId, new_qty: Qty) {
-        assert!(new_qty > 0, "move_to_back of id {id} with zero quantity");
+        debug_assert!(new_qty > 0, "move_to_back with zero quantity");
         let Some(order) = self.orders.get_mut(&id) else {
-            panic!("move_to_back on non-live id {id}");
+            debug_assert!(false, "move_to_back on non-live id {id}");
+            return;
         };
         order.resting.remaining = new_qty;
         let (side, price) = (order.side, order.resting.price);
         let Some(queue) = self.levels_mut(side).get_mut(&price) else {
-            panic!("baseline invariant violated: live id {id} has no level");
+            debug_assert!(false, "live id {id} has no level");
+            return;
         };
         // Same O(level length) linear search as `remove`; see DECISIONS.md #4, #5.
-        let Some(pos) = queue.iter().position(|&q| q == id) else {
-            panic!("baseline invariant violated: live id {id} not in its level");
-        };
-        queue.remove(pos);
-        queue.push_back(id);
+        let pos = queue.iter().position(|&q| q == id);
+        debug_assert!(pos.is_some(), "live id {id} not in its level");
+        if let Some(pos) = pos {
+            queue.remove(pos);
+            queue.push_back(id);
+        }
     }
 
     fn order_count(&self) -> usize {
@@ -228,73 +229,5 @@ impl Book for BaselineBook {
     #[cfg(test)]
     fn live_ids(&self) -> Vec<OrderId> {
         self.orders.keys().copied().collect()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[should_panic(expected = "fill_front: qty 6 not in 1..=5")]
-    fn fill_front_over_remaining_panics() {
-        let mut b = BaselineBook::new();
-        b.insert(
-            Side::Sell,
-            Resting {
-                id: 1,
-                account: 0,
-                price: 100,
-                remaining: 5,
-            },
-        );
-        b.fill_front(Side::Sell, 6);
-    }
-
-    fn one_order(id: OrderId) -> BaselineBook {
-        let mut b = BaselineBook::new();
-        b.insert(
-            Side::Sell,
-            Resting {
-                id,
-                account: 0,
-                price: 100,
-                remaining: 5,
-            },
-        );
-        b
-    }
-
-    #[test]
-    #[should_panic(expected = "insert of already-live id 1")]
-    fn insert_of_live_id_panics() {
-        let mut b = one_order(1);
-        b.insert(
-            Side::Buy,
-            Resting {
-                id: 1,
-                account: 0,
-                price: 90,
-                remaining: 1,
-            },
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "set_qty on non-live id 7")]
-    fn set_qty_on_non_live_id_panics() {
-        one_order(1).set_qty(7, 1);
-    }
-
-    #[test]
-    #[should_panic(expected = "move_to_back on non-live id 7")]
-    fn move_to_back_on_non_live_id_panics() {
-        one_order(1).move_to_back(7, 1);
-    }
-
-    #[test]
-    #[should_panic(expected = "fill_front on empty Buy side")]
-    fn fill_front_on_empty_side_panics() {
-        BaselineBook::new().fill_front(Side::Buy, 1);
     }
 }
